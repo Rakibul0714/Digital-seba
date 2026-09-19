@@ -1,6 +1,6 @@
 'use client';
 
-import { FormEvent, useMemo, useState } from 'react';
+import { FormEvent, useMemo, useRef, useState } from 'react';
 import {
   Accessibility, ArrowRight, ArrowUpRight, BadgeCheck, BriefcaseBusiness, Building2, CalendarDays, Check, CheckCircle2,
   ChevronRight, CircleDollarSign, ClipboardCheck, Clock3, Copy, CreditCard, Download, FileCheck2,
@@ -159,12 +159,35 @@ function Footer() {
   return <footer className="footer"><div className="container"><div className="footer-grid"><div><Brand /><p className="footer-desc">Digital Seba is by your side to deliver all Union Parishad citizen services easily, quickly, and transparently.</p><div className="socials"><a href="https://www.facebook.com" aria-label="Facebook"><Globe2 size={15} /></a><a href="mailto:hello@digitalseba.org" aria-label="Email"><Mail size={15} /></a><a href="tel:+8801788812345" aria-label="Phone"><Phone size={15} /></a></div></div><div><h4>Quick Links</h4><ul className="footer-links"><li><a href="#services">All Services</a></li><li><a href="/certificate-download">Certificate Verification</a></li><li><a href="/holding-tax/check">Holding Tax</a></li><li><a href="/notices">Notice Board</a></li></ul></div><div><h4>Important</h4><ul className="footer-links"><li><a href="/contact-us">Contact</a></li><li><a href="/login">Office Login</a></li><li><a href="/track/demo">Track Application</a></li><li><a href="/verify/demo">QR Verification</a></li></ul></div><div><h4>Contact</h4><div className="contact-line"><Phone size={14} /> +880 1788812345</div><div className="contact-line"><Mail size={14} /> hello@digitalseba.org</div><div className="contact-line"><MapPin size={14} /> Digital Seba Parishad, Rajshahi</div></div></div><div className="footer-bottom"><span>© 2026, Digital Seba. All Rights Reserved</span><span>Technical Support by Digital Seba Team</span></div></div></footer>;
 }
 
+const stepStyle = { display: 'flex', flexDirection: 'column' as const, gap: 12, padding: '16px 0' };
+const fieldStyle = { display: 'flex', flexDirection: 'column' as const, gap: 6 };
+const labelStyle = { fontSize: 13, fontWeight: 600, color: '#374151' };
+const inputStyle = { padding: '10px 14px', border: '1px solid #d1d5db', borderRadius: 10, fontSize: 14, outline: 'none', width: '100%', boxSizing: 'border-box' as const };
+const fileBoxStyle = { display: 'flex', flexDirection: 'column' as const, alignItems: 'center', justifyContent: 'center', gap: 8, padding: '24px 16px', border: '2px dashed #d1d5db', borderRadius: 12, cursor: 'pointer', background: '#f9fafb', transition: 'border-color 0.2s' };
+const fileItemStyle = { display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 10, fontSize: 13 };
+const stepBtnRow = { display: 'flex', justifyContent: 'space-between', gap: 10, paddingTop: 12, borderTop: '1px solid #e5e7eb', marginTop: 8 };
+const primaryBtn = { padding: '10px 22px', background: '#087b58', color: '#fff', border: 0, borderRadius: 10, fontSize: 14, fontWeight: 700, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6 };
+const secondaryBtn = { padding: '10px 22px', background: '#f3f4f6', color: '#374151', border: '1px solid #d1d5db', borderRadius: 10, fontSize: 14, fontWeight: 600, cursor: 'pointer' };
+
 function ServiceModal({ service, onClose }: { service: Service; onClose: () => void }) {
   const [submitted, setSubmitted] = useState(false);
   const [trackingNo, setTrackingNo] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [step, setStep] = useState(1);
+  const [files, setFiles] = useState<File[]>([]);
+  const formRef = useRef<HTMLFormElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleFiles = (newFiles: FileList | null) => {
+    if (!newFiles) return;
+    const added = Array.from(newFiles).filter((f) => f.size <= 5 * 1024 * 1024);
+    setFiles((prev) => [...prev, ...added].slice(0, 5));
+  };
+
+  const removeFile = (index: number) => {
+    setFiles((prev) => prev.filter((_, i) => i !== index));
+  };
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -174,6 +197,7 @@ function ServiceModal({ service, onClose }: { service: Service; onClose: () => v
       const form = event.currentTarget;
       const formData = new FormData(form);
       const data = Object.fromEntries(formData.entries());
+
       const response = await fetch('/api/v1/applications', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -192,6 +216,16 @@ function ServiceModal({ service, onClose }: { service: Service; onClose: () => v
       });
       const result = await response.json();
       if (!response.ok) throw new Error(result.message || 'Failed to submit application');
+
+      if (files.length > 0 && result.trackingNo) {
+        const docForm = new FormData();
+        files.forEach((f) => docForm.append('documents', f));
+        await fetch(`/api/v1/applications/${result.trackingNo}/documents`, {
+          method: 'POST',
+          body: docForm,
+        });
+      }
+
       setTrackingNo(result.trackingNo);
       setSubmitted(true);
     } catch (err) {
@@ -201,9 +235,88 @@ function ServiceModal({ service, onClose }: { service: Service; onClose: () => v
     }
   };
 
-  return <div className="modal-backdrop" role="dialog" aria-modal="true"><div className="modal">
-    {!submitted ? <><div className="modal-head"><div><h2>{service.name}</h2><p className="modal-sub">Complete the steps below to apply. Your information will be securely stored.</p></div><button className="close-btn" onClick={onClose} aria-label="Close"><X size={17} /></button></div><div className="step-row"><span className={`step-item ${step >= 1 ? 'active' : ''}`}><b className="step-num">1</b>Service Selection</span><span className={`step-item ${step >= 2 ? 'active' : ''}`}><b className="step-num">2</b>Fill Information</span><span className={`step-item ${step >= 3 ? 'active' : ''}`}><b className="step-num">3</b>Documents</span></div><form onSubmit={submit}><div className="form-grid"><div className="field"><label htmlFor="nid">NID Number</label><input id="nid" name="nid" placeholder="10 or 17 digit NID" required /></div><div className="field"><label htmlFor="name">Full Name</label><input id="name" name="name" placeholder="Your full name" required /></div><div className="field"><label htmlFor="guardian">Father/Husband's Name</label><input id="guardian" name="guardian" placeholder="Father or Husband's Name" required /></div><div className="field"><label htmlFor="mother">Mother's Name</label><input id="mother" name="mother" placeholder="Mother's Name" required /></div><div className="field"><label htmlFor="mobile">Mobile Number</label><input id="mobile" name="mobile" placeholder="01788812345" required /></div><div className="field"><label htmlFor="union">Union</label><select id="union" name="union" defaultValue="union-01"><option value="union-01">Union 01</option><option value="union-02">Union 02</option></select></div><div className="field"><label htmlFor="ward">Ward</label><select id="ward" name="ward" defaultValue="01"><option value="01">Ward 01</option><option value="02">Ward 02</option><option value="03">Ward 03</option><option value="04">Ward 04</option><option value="05">Ward 05</option></select></div><div className="field"><label htmlFor="holding">Holding Number (if any)</label><input id="holding" name="holding" placeholder="e.g. 123/45" /></div><div className="field full"><label htmlFor="address">Current Address</label><textarea id="address" name="address" placeholder="Village, Post Office, Ward, Union" required /></div><div className="field full"><label htmlFor="attachment">Required Documents</label><div className="secondary-btn" style={{ justifyContent: 'center', borderStyle: 'dashed' }}><UploadCloud size={18} /> Upload Documents</div></div></div><div className="modal-foot"><button type="button" className="secondary-btn" onClick={onClose}>Close</button><button type="submit" className="primary-btn" disabled={loading}>{loading ? 'Submitting...' : 'Submit'}</button></div></form></>
-    : <div style={{ textAlign: 'center', padding: 30 }}><div className="success-icon"><CheckCircle2 size={32} /></div><h2>Application Submitted Successfully</h2><p style={{ color: '#555', margin: '10px 0' }}>Tracking Number: <strong>{trackingNo}</strong></p><p style={{ color: '#777', fontSize: 13 }}>Save this number.</p><button className="primary-btn" onClick={onClose} style={{ marginTop: 20 }}>Close</button></div>}
+  return <div className="modal-backdrop" role="dialog" aria-modal="true"><div className="modal" style={{ maxWidth: 560 }}>
+    {!submitted ? <><div className="modal-head"><div><h2>{service.name}</h2><p className="modal-sub">Complete the steps below to apply. Your information will be securely stored.</p></div><button className="close-btn" onClick={onClose} aria-label="Close"><X size={17} /></button></div>
+
+      <div style={{ display: 'flex', gap: 8, padding: '0 0 16px' }}>
+        {['Service Selection', 'Fill Information', 'Documents'].map((label, i) => {
+          const num = i + 1;
+          const isActive = step === num;
+          const isDone = step > num;
+          return <div key={label} style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', borderRadius: 10, background: isActive ? '#ecfdf5' : isDone ? '#f0fdf4' : '#f9fafb', border: `1px solid ${isActive ? '#087b58' : isDone ? '#bbf7d0' : '#e5e7eb'}` }}>
+            <span style={{ width: 26, height: 26, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700, background: isDone ? '#087b58' : isActive ? '#087b58' : '#d1d5db', color: '#fff', flexShrink: 0 }}>{isDone ? <Check size={13} /> : num}</span>
+            <span style={{ fontSize: 12, fontWeight: isActive ? 700 : 500, color: isActive ? '#087b58' : '#6b7280' }}>{label}</span>
+          </div>;
+        })}
+      </div>
+
+      <form ref={formRef} onSubmit={submit}>
+
+        {step === 1 && <div style={stepStyle}>
+          <div style={{ background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 12, padding: 16 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
+              <CheckCircle2 size={20} style={{ color: '#087b58' }} />
+              <div>
+                <div style={{ fontSize: 14, fontWeight: 700, color: '#087b58' }}>{service.name}</div>
+                <div style={{ fontSize: 12, color: '#6b7280' }}>Service Fee: ৳50</div>
+              </div>
+            </div>
+            <p style={{ fontSize: 13, color: '#374151', margin: 0 }}>Please confirm you want to apply for this service. You will need your NID number and personal information in the next step.</p>
+          </div>
+          <div style={stepBtnRow}>
+            <button type="button" onClick={onClose} style={secondaryBtn}>Cancel</button>
+            <button type="button" onClick={() => setStep(2)} style={primaryBtn}>Next Step <ArrowRight size={15} /></button>
+          </div>
+        </div>}
+
+        {step === 2 && <div style={stepStyle}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+            <div style={fieldStyle}><label style={labelStyle}>NID Number</label><input name="nid" placeholder="10 or 17 digit NID" required style={inputStyle} /></div>
+            <div style={fieldStyle}><label style={labelStyle}>Full Name</label><input name="name" placeholder="Your full name" required style={inputStyle} /></div>
+            <div style={fieldStyle}><label style={labelStyle}>Father/Husband's Name</label><input name="guardian" placeholder="Father or Husband's Name" required style={inputStyle} /></div>
+            <div style={fieldStyle}><label style={labelStyle}>Mother's Name</label><input name="mother" placeholder="Mother's Name" required style={inputStyle} /></div>
+            <div style={fieldStyle}><label style={labelStyle}>Mobile Number</label><input name="mobile" placeholder="01788812345" required style={inputStyle} /></div>
+            <div style={fieldStyle}><label style={labelStyle}>Union</label><select name="union" defaultValue="union-01" style={inputStyle}><option value="union-01">Union 01</option><option value="union-02">Union 02</option></select></div>
+            <div style={fieldStyle}><label style={labelStyle}>Ward</label><select name="ward" defaultValue="01" style={inputStyle}><option value="01">Ward 01</option><option value="02">Ward 02</option><option value="03">Ward 03</option><option value="04">Ward 04</option><option value="05">Ward 05</option></select></div>
+            <div style={fieldStyle}><label style={labelStyle}>Holding Number</label><input name="holding" placeholder="e.g. 123/45" style={inputStyle} /></div>
+          </div>
+          <div style={fieldStyle}><label style={labelStyle}>Current Address</label><textarea name="address" placeholder="Village, Post Office, Ward, Union" required style={{ ...inputStyle, minHeight: 60, resize: 'vertical' }} /></div>
+          <div style={stepBtnRow}>
+            <button type="button" onClick={() => setStep(1)} style={secondaryBtn}>Back</button>
+            <button type="button" onClick={() => setStep(3)} style={primaryBtn}>Next Step <ArrowRight size={15} /></button>
+          </div>
+        </div>}
+
+        {step === 3 && <div style={stepStyle}>
+          <p style={{ fontSize: 13, color: '#6b7280', margin: 0 }}>Upload supporting documents (NID copy, photos, etc.). Maximum 5 files, 5MB each.</p>
+
+          <div style={{ ...fileBoxStyle, borderColor: files.length ? '#087b58' : '#d1d5db' }} onClick={() => fileInputRef.current?.click()}>
+            <UploadCloud size={28} style={{ color: '#9ca3af' }} />
+            <span style={{ fontSize: 13, fontWeight: 600, color: '#374151' }}>Click to upload documents</span>
+            <span style={{ fontSize: 11, color: '#9ca3af' }}>NID Copy, Photo, Supporting Letters (PDF, JPG, PNG)</span>
+          </div>
+          <input ref={fileInputRef} type="file" multiple accept=".pdf,.jpg,.jpeg,.png" style={{ display: 'none' }} onChange={(e) => handleFiles(e.target.files)} />
+
+          {files.length > 0 && <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {files.map((f, i) => <div key={i} style={fileItemStyle}>
+              <FileText size={16} style={{ color: '#087b58', flexShrink: 0 }} />
+              <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.name}</span>
+              <span style={{ fontSize: 11, color: '#9ca3af' }}>{(f.size / 1024).toFixed(0)} KB</span>
+              <button type="button" onClick={(e) => { e.stopPropagation(); removeFile(i); }} style={{ background: 'none', border: 0, cursor: 'pointer', color: '#dc2626', padding: 2 }}><X size={14} /></button>
+            </div>)}
+          </div>}
+
+          {error && <p style={{ color: '#dc2626', fontSize: 13, background: '#fef2f2', padding: '8px 12px', borderRadius: 8, margin: 0 }}>{error}</p>}
+
+          <div style={stepBtnRow}>
+            <button type="button" onClick={() => setStep(2)} style={secondaryBtn}>Back</button>
+            <button type="submit" disabled={loading} style={{ ...primaryBtn, opacity: loading ? 0.6 : 1 }}>{loading ? 'Submitting...' : 'Submit Application'} {!loading && <Send size={15} />}</button>
+          </div>
+        </div>}
+
+      </form></>
+
+      : <div style={{ textAlign: 'center', padding: 30 }}><div className="success-icon"><CheckCircle2 size={32} /></div><h2>Application Submitted Successfully</h2><p style={{ color: '#555', margin: '10px 0' }}>Tracking Number: <strong>{trackingNo}</strong></p><p style={{ color: '#777', fontSize: 13 }}>Save this number. You can track your application status anytime.</p><button className="primary-btn" onClick={onClose} style={{ marginTop: 20 }}>Close</button></div>}
   </div></div>;
 }
 

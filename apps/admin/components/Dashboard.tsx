@@ -3,11 +3,12 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
   Activity, ArrowDownRight, ArrowRight, ArrowUpRight, Bell, BriefcaseBusiness, ChevronDown, ChevronUp,
-  CircleDollarSign, ClipboardList, Check, FileCheck2, FileText, Landmark, LayoutDashboard, LogOut, MapPinned,
+  CircleDollarSign, ClipboardList, Check, FileCheck2, FileText, FileText as FileIcon, Landmark, LayoutDashboard, LogOut, MapPinned,
   Menu, Moon, MoreHorizontal, Search, Settings, ShieldCheck, Sun, UsersRound, UserRound, X, XCircle,
 } from 'lucide-react';
 
-type AppRow = { id: string; trackingNo: string; serviceName: string; applicant: Record<string, string>; status: string; createdAt: string };
+type AppDoc = { id: string; name: string; mimeType: string; size: number; createdAt: string };
+type AppRow = { id: string; trackingNo: string; serviceName: string; applicant: Record<string, string>; status: string; remarks?: string; documentCount: number; createdAt: string };
 
 type MenuItem = { key: string; label: string; icon: React.ComponentType<{ size?: number }>; badge?: string; children?: { key: string; label: string }[] };
 
@@ -29,6 +30,8 @@ const menuItems: MenuItem[] = [
   { key: 'users', label: 'Users & Roles', icon: UsersRound, children: [{ key: 'users-list', label: 'User List' }, { key: 'roles', label: 'Roles & Permissions' }] },
 ];
 
+const adminBase = typeof window !== 'undefined' ? `${window.location.origin}/admin` : '';
+
 export default function Dashboard() {
   const [dark, setDark] = useState(false);
   const [side, setSide] = useState(false);
@@ -36,9 +39,10 @@ export default function Dashboard() {
   const [expanded, setExpanded] = useState<string[]>(['tax-payment', 'applications']);
   const [userMenu, setUserMenu] = useState(false);
   const [applications, setApplications] = useState<AppRow[]>([]);
+  const [toast, setToast] = useState<{ msg: string; type: 'success' | 'error' } | null>(null);
+  const [detailApp, setDetailApp] = useState<(AppRow & { documents: AppDoc[] }) | null>(null);
+  const [detailDocs, setDetailDocs] = useState<AppDoc[]>([]);
   const currentLabel = menuItems.flatMap((item) => [item, ...(item.children ?? []).map((child) => ({ ...item, ...child, icon: item.icon }))]).find((item) => item.key === activeMenu)?.label ?? 'Dashboard';
-
-  const adminBase = typeof window !== 'undefined' ? `${window.location.origin}/admin` : '';
 
   const authHeaders = useCallback((): Record<string, string> => {
     const token = localStorage.getItem('accessToken');
@@ -47,9 +51,15 @@ export default function Dashboard() {
     return h;
   }, []);
 
+  const showToast = (msg: string, type: 'success' | 'error' = 'success') => {
+    setToast({ msg, type });
+    setTimeout(() => setToast(null), 3500);
+  };
+
   const fetchApplications = useCallback(async () => {
     try {
       const res = await fetch('/api/v1/admin/applications', { headers: authHeaders() });
+      if (res.status === 401) { window.location.href = `${adminBase}/login`; return; }
       const data = await res.json();
       if (Array.isArray(data)) setApplications(data);
     } catch { /* keep empty */ }
@@ -67,20 +77,35 @@ export default function Dashboard() {
     const token = localStorage.getItem('accessToken');
     if (!token) { window.location.href = `${adminBase}/login`; return; }
     fetchApplications();
-  }, [fetchApplications, adminBase]);
+  }, [fetchApplications]);
 
   const handleApprove = async (trackingNo: string) => {
     try {
-      await fetch(`/api/v1/admin/applications/${trackingNo}/approve`, { method: 'PATCH', headers: authHeaders() });
-      setApplications((prev) => prev.map((a) => a.trackingNo === trackingNo ? { ...a, status: 'APPROVED' } : a));
-    } catch { /* ignore */ }
+      const res = await fetch(`/api/v1/admin/applications/${trackingNo}/approve`, { method: 'PATCH', headers: authHeaders() });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || 'Failed');
+      setApplications((prev) => prev.map((a) => a.trackingNo === trackingNo ? { ...a, status: 'ISSUED' } : a));
+      showToast(`Application ${trackingNo} approved & certificate issued`);
+    } catch (err) { showToast(err instanceof Error ? err.message : 'Approve failed', 'error'); }
   };
 
   const handleReject = async (trackingNo: string) => {
     try {
-      await fetch(`/api/v1/admin/applications/${trackingNo}/reject`, { method: 'PATCH', headers: authHeaders() });
+      const res = await fetch(`/api/v1/admin/applications/${trackingNo}/reject`, { method: 'PATCH', headers: authHeaders(), body: JSON.stringify({ remarks: 'Rejected by admin' }) });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || 'Failed');
       setApplications((prev) => prev.map((a) => a.trackingNo === trackingNo ? { ...a, status: 'REJECTED' } : a));
-    } catch { /* ignore */ }
+      showToast(`Application ${trackingNo} rejected`);
+    } catch (err) { showToast(err instanceof Error ? err.message : 'Reject failed', 'error'); }
+  };
+
+  const openDetail = async (app: AppRow) => {
+    setDetailApp({ ...app, documents: [] });
+    try {
+      const res = await fetch(`/api/v1/admin/applications/${app.trackingNo}`, { headers: authHeaders() });
+      const data = await res.json();
+      if (data.documents) { setDetailDocs(data.documents); setDetailApp((prev) => prev ? { ...prev, documents: data.documents } : null); }
+    } catch { setDetailDocs([]); }
   };
 
   const selectMenu = (key: string, label: string) => { setActiveMenu(key); setSide(false); if (key !== 'dashboard') setUserMenu(false); };
@@ -88,6 +113,34 @@ export default function Dashboard() {
   const logout = () => { localStorage.removeItem('accessToken'); localStorage.removeItem('user'); window.location.href = `${adminBase}/login`; };
 
   return <div className={`admin-shell ${dark ? 'admin-dark' : ''}`}>
+    {toast && <div style={{ position: 'fixed', top: 20, right: 20, zIndex: 9999, padding: '12px 20px', borderRadius: 10, fontSize: 13, fontWeight: 600, color: '#fff', background: toast.type === 'success' ? '#087b58' : '#dc2626', boxShadow: '0 4px 14px rgba(0,0,0,.2)' }}>{toast.msg}</div>}
+
+    {detailApp && <div style={{ position: 'fixed', inset: 0, zIndex: 9998, background: 'rgba(0,0,0,.4)', display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => { setDetailApp(null); setDetailDocs([]); }}>
+      <div style={{ background: '#fff', borderRadius: 16, padding: 24, maxWidth: 520, width: '90%', maxHeight: '80vh', overflow: 'auto' }} onClick={(e) => e.stopPropagation()}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}><h3 style={{ margin: 0, fontSize: 16 }}>Application Details</h3><button onClick={() => { setDetailApp(null); setDetailDocs([]); }} style={{ background: 'none', border: 0, cursor: 'pointer' }}><X size={18} /></button></div>
+        <div style={{ display: 'grid', gap: 8, fontSize: 13 }}>
+          <div><strong>Tracking:</strong> {detailApp.trackingNo}</div>
+          <div><strong>Service:</strong> {detailApp.serviceName}</div>
+          <div><strong>Name:</strong> {detailApp.applicant?.fullName}</div>
+          <div><strong>NID:</strong> {detailApp.applicant?.nid}</div>
+          <div><strong>Mobile:</strong> {detailApp.applicant?.mobile}</div>
+          <div><strong>Father:</strong> {detailApp.applicant?.fatherName}</div>
+          <div><strong>Mother:</strong> {detailApp.applicant?.motherName}</div>
+          <div><strong>Address:</strong> {detailApp.applicant?.address}</div>
+          <div><strong>Ward:</strong> {detailApp.applicant?.ward}</div>
+          <div><strong>Status:</strong> <span style={{ color: detailApp.status === 'ISSUED' || detailApp.status === 'APPROVED' ? '#087b58' : detailApp.status === 'REJECTED' ? '#dc2626' : '#b45309', fontWeight: 700 }}>{detailApp.status}</span></div>
+        </div>
+        <div style={{ marginTop: 16 }}><strong style={{ fontSize: 13 }}>Documents ({detailDocs.length})</strong>
+          {detailDocs.length === 0 ? <p style={{ fontSize: 12, color: '#9ca3af', margin: '6px 0 0' }}>No documents uploaded</p> :
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 8 }}>{detailDocs.map((d) => <div key={d.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', background: '#f9fafb', border: '1px solid #e5e7eb', borderRadius: 8, fontSize: 12 }}><FileIcon size={14} style={{ color: '#087b58' }} /><span style={{ flex: 1 }}>{d.name}</span><span style={{ color: '#9ca3af' }}>{(d.size / 1024).toFixed(0)} KB</span></div>)}</div>}
+        </div>
+        {detailApp.status !== 'ISSUED' && detailApp.status !== 'APPROVED' && detailApp.status !== 'REJECTED' && <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
+          <button onClick={() => { handleApprove(detailApp.trackingNo); setDetailApp(null); }} style={{ flex: 1, padding: '10px', background: '#087b58', color: '#fff', border: 0, borderRadius: 8, fontWeight: 700, cursor: 'pointer' }}><Check size={14} style={{ verticalAlign: -2 }} /> Approve</button>
+          <button onClick={() => { handleReject(detailApp.trackingNo); setDetailApp(null); }} style={{ flex: 1, padding: '10px', background: '#dc2626', color: '#fff', border: 0, borderRadius: 8, fontWeight: 700, cursor: 'pointer' }}><XCircle size={14} style={{ verticalAlign: -2 }} /> Reject</button>
+        </div>}
+      </div>
+    </div>}
+
     <aside className={`sidebar ${side ? 'show' : ''}`}>
       <div className="side-brand"><span className="brand-mark"><Landmark size={19} /></span><span>Digital Seba<small>Office Portal</small></span><button className="side-close" onClick={() => setSide(false)}><X size={17} /></button></div>
       <div className="union-switch"><span>Active Union</span><strong>Union Parishad Office</strong><ChevronDown size={15} /></div>
@@ -103,7 +156,7 @@ export default function Dashboard() {
     <main className="admin-main">
       <header className="admin-top"><button className="mobile-menu" onClick={() => setSide(true)}><Menu size={19} /></button><div><span className="crumb">Home <b>/</b></span><strong>{currentLabel}</strong></div><div className="admin-top-right"><button className="admin-icon" onClick={() => setDark(!dark)}>{dark ? <Sun size={17} /> : <Moon size={17} />}</button><button className="admin-icon notify"><Bell size={17} /><i /></button><button className="user-mini" onClick={() => setUserMenu(!userMenu)}><span>SA</span><div><strong>Secretary Admin</strong><small>Union Admin</small></div><ChevronDown size={14} /></button>{userMenu && <div className="user-popover"><strong>Secretary Admin</strong><span>office@digitalseba.local</span><button>View Profile</button><button onClick={logout}>Logout</button></div>}</div></header>
       <div className="dash-content">
-        {activeMenu === 'dashboard' ? <DashboardHome applications={applications} /> : <ModuleWorkspace active={activeMenu} label={currentLabel} applications={applications} onApprove={handleApprove} onReject={handleReject} />}
+        {activeMenu === 'dashboard' ? <DashboardHome applications={applications} /> : <ModuleWorkspace active={activeMenu} label={currentLabel} applications={applications} onApprove={handleApprove} onReject={handleReject} onViewDetail={openDetail} />}
       </div>
     </main>
   </div>;
@@ -111,152 +164,83 @@ export default function Dashboard() {
 
 function DashboardHome({ applications }: { applications: AppRow[] }) {
   const pending = applications.filter((a) => a.status === 'PENDING').length;
-  const approved = applications.filter((a) => a.status === 'APPROVED' || a.status === 'ISSUED').length;
+  const issued = applications.filter((a) => a.status === 'ISSUED' || a.status === 'APPROVED').length;
+  const rejected = applications.filter((a) => a.status === 'REJECTED').length;
   return <>
-    <div className="dash-heading">
-      <div>
-        <span className="small-label">Good Morning, Secretary</span>
-        <h1>Today's Summary</h1>
-      </div>
-      <button className="export-btn"><ArrowDownRight size={15} /> Export Report</button>
-    </div>
+    <div className="dash-heading"><div><span className="small-label">Good Morning, Secretary</span><h1>Today's Summary</h1></div><button className="export-btn"><ArrowDownRight size={15} /> Export Report</button></div>
     <div className="admin-stats">
-      <Stat icon={ClipboardList} value={String(applications.length || 34)} label="Total Applications" change="+12.4%" positive />
-      <Stat icon={ClockIcon} value={String(pending || 12)} label="Pending" change="Needs Attention" />
-      <Stat icon={FileCheck2} value={String(approved || 28)} label="Approved" change="+8.2%" positive />
-      <Stat icon={Activity} value="$42,850" label="This Month's Tax" change="+18.7%" positive />
+      <Stat icon={ClipboardList} value={String(applications.length)} label="Total Applications" change="All time" />
+      <Stat icon={ClockIcon} value={String(pending)} label="Pending Review" change="Needs action" />
+      <Stat icon={FileCheck2} value={String(issued)} label="Approved / Issued" change="Complete" positive />
+      <Stat icon={Activity} value={String(rejected)} label="Rejected" change="Declined" />
     </div>
     <div className="dashboard-grid">
       <section className="dash-card chart-card">
-        <div className="card-heading">
-          <div>
-            <h2>Application Statistics</h2>
-            <p>Comparative chart of last 6 months</p>
-          </div>
-          <button className="period-btn">This 6 Months <ChevronDown size={14} /></button>
-        </div>
-        <div className="chart">
-          <div className="y-labels"><span>60</span><span>40</span><span>20</span><span>0</span></div>
-          <div className="chart-area">
-            <div className="gridline g1" /><div className="gridline g2" /><div className="gridline g3" /><div className="gridline g4" />
-            <svg viewBox="0 0 600 220" preserveAspectRatio="none" className="line-chart">
-              <path d="M0,160 C55,147 64,168 105,131 S156,105 205,126 S258,113 300,93 S352,118 403,83 S463,57 505,68 S550,41 600,22" fill="none" stroke="#087b58" strokeWidth="3" />
-              <path d="M0,160 C55,147 64,168 105,131 S156,105 205,126 S258,113 300,93 S352,118 403,83 S463,57 505,68 S550,41 600,22 L600,220 L0,220Z" fill="url(#fill)" opacity=".17" />
-              <defs><linearGradient id="fill" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor="#087b58" /><stop offset="1" stopColor="#fff" stopOpacity="0" /></linearGradient></defs>
-            </svg>
-            <div className="x-labels"><span>April</span><span>May</span><span>June</span><span>July</span><span>August</span><span>September</span></div>
-          </div>
+        <div className="card-heading"><div><h2>Application Statistics</h2><p>Overview of all applications</p></div></div>
+        <div style={{ padding: 20, display: 'flex', gap: 20, flexWrap: 'wrap' }}>
+          {[{ l: 'Pending', v: pending, c: '#f59e0b' }, { l: 'Issued', v: issued, c: '#087b58' }, { l: 'Rejected', v: rejected, c: '#dc2626' }].map((s) => <div key={s.l} style={{ flex: 1, minWidth: 100, textAlign: 'center', padding: 16, background: '#f9fafb', borderRadius: 12 }}>
+            <div style={{ fontSize: 28, fontWeight: 800, color: s.c }}>{s.v}</div>
+            <div style={{ fontSize: 12, color: '#6b7280', marginTop: 4 }}>{s.l}</div>
+          </div>)}
         </div>
       </section>
       <section className="dash-card tasks-card">
-        <div className="card-heading">
-          <div>
-            <h2>Recent Applications</h2>
-            <p>Latest submissions</p>
-          </div>
-        </div>
+        <div className="card-heading"><div><h2>Recent Applications</h2><p>Latest submissions</p></div></div>
         <div className="task-list">
-          {applications.slice(0, 5).map((app) => <div className="task-item" key={app.trackingNo}>
-            <div className="task-icon" style={{ background: app.status === 'APPROVED' ? '#e8f5ec' : app.status === 'REJECTED' ? '#fef2f2' : '#fff8e1', color: app.status === 'APPROVED' ? '#087152' : app.status === 'REJECTED' ? '#dc2626' : '#b45309' }}>
-              {app.status === 'APPROVED' ? <Check size={16} /> : app.status === 'REJECTED' ? <XCircle size={16} /> : <ClockIcon size={16} />}
+          {applications.slice(0, 6).map((app) => <div className="task-item" key={app.trackingNo}>
+            <div className="task-icon" style={{ background: app.status === 'ISSUED' || app.status === 'APPROVED' ? '#e8f5ec' : app.status === 'REJECTED' ? '#fef2f2' : '#fff8e1', color: app.status === 'ISSUED' || app.status === 'APPROVED' ? '#087152' : app.status === 'REJECTED' ? '#dc2626' : '#b45309' }}>
+              {app.status === 'ISSUED' || app.status === 'APPROVED' ? <Check size={16} /> : app.status === 'REJECTED' ? <XCircle size={16} /> : <ClockIcon size={16} />}
             </div>
-            <div>
-              <strong>{app.applicant?.fullName || 'Unknown'}</strong>
-              <small>{app.trackingNo} · {app.status}</small>
-            </div>
+            <div><strong>{app.applicant?.fullName || 'Unknown'}</strong><small>{app.trackingNo} · {app.status} · {app.documentCount} docs</small></div>
           </div>)}
-          {!applications.length && <>
-            <div className="task-item"><div className="task-icon yellow"><ClipboardList size={16} /></div><div><strong>No applications yet</strong><small>Applications will appear here</small></div></div>
-          </>}
+          {!applications.length && <div className="task-item"><div className="task-icon yellow"><ClipboardList size={16} /></div><div><strong>No applications yet</strong><small>Applications will appear here</small></div></div>}
         </div>
       </section>
     </div>
   </>;
 }
 
-function ModuleWorkspace({ active, label, applications, onApprove, onReject }: { active: string; label: string; applications: AppRow[]; onApprove: (tn: string) => void; onReject: (tn: string) => void }) {
+function ModuleWorkspace({ active, label, applications, onApprove, onReject, onViewDetail }: { active: string; label: string; applications: AppRow[]; onApprove: (tn: string) => void; onReject: (tn: string) => void; onViewDetail: (app: AppRow) => void }) {
   const isApplicationsModule = active === 'applications' || active === 'certificate-applications' || active === 'application-review';
+  const isReview = active === 'application-review';
+  const filtered = isReview ? applications.filter((a) => a.status === 'PENDING') : applications;
+  const title = isReview ? 'Application Review' : isApplicationsModule ? 'Service Applications' : label;
+  const columns = isApplicationsModule ? ['Tracking No', 'Applicant', 'Service', 'Docs', 'Status'] : ['Name', 'Description', 'Date', 'Status'];
+  const values = isApplicationsModule
+    ? filtered.map((a) => [a.trackingNo, a.applicant?.fullName || 'Unknown', a.serviceName || 'Certificate', String(a.documentCount), a.status])
+    : [['Demo Record', 'Union Parishad Office Portal', '18 September 2026', 'Active']];
+  const statuses = isApplicationsModule ? filtered.map((a) => a.status) : [];
 
-  let columns: string[];
-  let values: string[][];
-  let trackingNos: string[];
-  let statuses: string[];
-  let title: string;
-  let subtitle: string;
-  let action: string;
-
-  if (isApplicationsModule) {
-    title = active === 'application-review' ? 'Application Review' : 'Service Applications';
-    subtitle = active === 'application-review' ? 'Applications awaiting review' : 'Review and approve certificate applications';
-    action = 'View All';
-    columns = ['Tracking No', 'Applicant', 'Service', 'Status'];
-    const filtered = active === 'application-review' ? applications.filter((a) => a.status === 'PENDING') : applications;
-    values = filtered.map((a) => [a.trackingNo, a.applicant?.fullName || 'Unknown', a.serviceName || 'Certificate', a.status]);
-    trackingNos = filtered.map((a) => a.trackingNo);
-    statuses = filtered.map((a) => a.status);
-  } else {
-    const content = moduleContent[active] ?? { title: label, subtitle: 'Information & management for this module', action: 'Add New', columns: ['Name', 'Description', 'Date', 'Status'], values: [['Demo Record', 'Union Parishad Office Portal', '18 September 2026', 'Active']] };
-    title = content.title;
-    subtitle = content.subtitle;
-    action = content.action;
-    columns = content.columns;
-    values = content.values;
-    trackingNos = [];
-    statuses = [];
-  }
-
-  const statusColor = (s: string) => {
-    if (s === 'APPROVED' || s === 'ISSUED') return 'approved';
-    if (s === 'REJECTED') return 'rejected';
-    return 'pending';
-  };
+  const statusColor = (s: string) => { if (s === 'APPROVED' || s === 'ISSUED') return 'approved'; if (s === 'REJECTED') return 'rejected'; return 'pending'; };
 
   return <>
-    <div className="dash-heading">
-      <div>
-        <span className="small-label">Office Management</span>
-        <h1>{title}</h1>
-        <p>{subtitle}</p>
-      </div>
-      <button className="export-btn"><ArrowRight size={15} /> {action}</button>
-    </div>
+    <div className="dash-heading"><div><span className="small-label">Office Management</span><h1>{title}</h1><p>{isReview ? 'Applications awaiting review' : 'Review and manage certificate applications'}</p></div></div>
     <div className="admin-stats">
-      <Stat icon={ClipboardList} value={String(applications.length || 12)} label="Total Records" change="This Month" />
-      <Stat icon={ClockIcon} value={String(applications.filter((a) => a.status === 'PENDING').length || 4)} label="Pending" change="Needs Attention" />
-      <Stat icon={ShieldCheck} value={String(applications.filter((a) => a.status === 'APPROVED').length || 28)} label="Completed" change="This Month" positive />
-      <Stat icon={Activity} value="98%" label="Service Quality" change="Good" positive />
+      <Stat icon={ClipboardList} value={String(applications.length)} label="Total" change="All time" />
+      <Stat icon={ClockIcon} value={String(applications.filter((a) => a.status === 'PENDING').length)} label="Pending" change="Action needed" />
+      <Stat icon={ShieldCheck} value={String(applications.filter((a) => a.status === 'ISSUED' || a.status === 'APPROVED').length)} label="Issued" change="Complete" positive />
+      <Stat icon={Activity} value={String(applications.filter((a) => a.status === 'REJECTED').length)} label="Rejected" change="" />
     </div>
     <section className="dash-card table-card module-table">
-      <div className="card-heading">
-        <div>
-          <h2>{title} List</h2>
-          <p>Search, filter & record management</p>
-        </div>
-        <div className="table-tools">
-          <div className="table-search"><Search size={14} /><input placeholder="Search..." /></div>
-        </div>
+      <div className="card-heading"><div><h2>{title} List</h2><p>Click a row to view details & documents</p></div>
+        <div className="table-tools"><div className="table-search"><Search size={14} /><input placeholder="Search..." /></div></div>
       </div>
       <div className="table-scroll">
         <table>
-          <thead>
-            <tr>
-              {columns.map((column) => <th key={column}>{column}</th>)}
-              {isApplicationsModule && <th>Actions</th>}
-            </tr>
-          </thead>
+          <thead><tr>{columns.map((c) => <th key={c}>{c}</th>)}{isApplicationsModule && <th>Actions</th>}</tr></thead>
           <tbody>
-            {values.map((value, rowIndex) => <tr key={rowIndex}>
-              {value.map((cell, index) => <td key={index}>{index === value.length - 1 && isApplicationsModule ? <span className={`status ${statusColor(cell)}`}>{cell}</span> : cell}</td>)}
-              {isApplicationsModule && <td>
-                {statuses[rowIndex] !== 'APPROVED' && statuses[rowIndex] !== 'ISSUED' && statuses[rowIndex] !== 'REJECTED' && <div style={{ display: 'flex', gap: '6px' }}>
-                  <button onClick={() => onApprove(trackingNos[rowIndex])} style={{ padding: '5px 10px', background: '#087152', color: '#fff', border: '0', borderRadius: '6px', fontSize: '11px', fontWeight: '700', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}><Check size={13} /> Approve</button>
-                  <button onClick={() => onReject(trackingNos[rowIndex])} style={{ padding: '5px 10px', background: '#dc2626', color: '#fff', border: '0', borderRadius: '6px', fontSize: '11px', fontWeight: '700', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}><XCircle size={13} /> Reject</button>
+            {filtered.map((app, ri) => <tr key={app.trackingNo} style={{ cursor: 'pointer' }} onClick={() => onViewDetail(app)}>
+              {values[ri].map((cell, ci) => <td key={ci}>{ci === values[ri].length - 1 && isApplicationsModule ? <span className={`status ${statusColor(cell)}`}>{cell}</span> : cell}</td>)}
+              {isApplicationsModule && <td onClick={(e) => e.stopPropagation()}>
+                {statuses[ri] !== 'APPROVED' && statuses[ri] !== 'ISSUED' && statuses[ri] !== 'REJECTED' && <div style={{ display: 'flex', gap: 6 }}>
+                  <button onClick={() => onApprove(filtered[ri].trackingNo)} style={{ padding: '4px 10px', background: '#087152', color: '#fff', border: 0, borderRadius: 6, fontSize: 11, fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4 }}><Check size={12} /> Approve</button>
+                  <button onClick={() => onReject(filtered[ri].trackingNo)} style={{ padding: '4px 10px', background: '#dc2626', color: '#fff', border: 0, borderRadius: 6, fontSize: 11, fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4 }}><XCircle size={12} /> Reject</button>
                 </div>}
-                {(statuses[rowIndex] === 'APPROVED' || statuses[rowIndex] === 'ISSUED') && <span style={{ color: '#087152', fontSize: '12px', fontWeight: '600' }}><Check size={14} /> Approved</span>}
-                {statuses[rowIndex] === 'REJECTED' && <span style={{ color: '#dc2626', fontSize: '12px', fontWeight: '600' }}><XCircle size={14} /> Rejected</span>}
+                {(statuses[ri] === 'APPROVED' || statuses[ri] === 'ISSUED') && <span style={{ color: '#087152', fontSize: 12, fontWeight: 600 }}><Check size={14} /> Issued</span>}
+                {statuses[ri] === 'REJECTED' && <span style={{ color: '#dc2626', fontSize: 12, fontWeight: 600 }}><XCircle size={14} /> Rejected</span>}
               </td>}
             </tr>)}
-            {!values.length && <tr><td colSpan={columns.length + (isApplicationsModule ? 1 : 0)} style={{ textAlign: 'center', padding: '30px', color: '#888' }}>No records found</td></tr>}
+            {!filtered.length && <tr><td colSpan={columns.length + (isApplicationsModule ? 1 : 0)} style={{ textAlign: 'center', padding: 30, color: '#888' }}>No records found</td></tr>}
           </tbody>
         </table>
       </div>

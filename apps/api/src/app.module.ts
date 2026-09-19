@@ -1,12 +1,17 @@
 import {
-  Body, Controller, Get, Headers, Param, Module, Post, Patch, UnauthorizedException,
-  BadRequestException,
+  Body, Controller, Get, Headers, Param, Module, Post, Patch, UseInterceptors,
+  UploadedFiles, UnauthorizedException, BadRequestException, NotFoundException,
 } from '@nestjs/common';
-import { IsEmail, IsMobilePhone, IsNotEmpty, IsString, MinLength } from 'class-validator';
+import { FilesInterceptor } from '@nestjs/platform-express';
+import { IsEmail, IsNotEmpty, IsString, MinLength } from 'class-validator';
 import { PrismaClient } from '@prisma/client';
 import * as crypto from 'crypto';
+import * as fs from 'fs';
+import * as path from 'path';
 
 const prisma = new PrismaClient();
+const UPLOAD_DIR = path.join(__dirname, '..', 'uploads');
+if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 
 const JWT_SECRET = process.env.JWT_SECRET || 'digital-seba-jwt-secret-change-in-production-2026';
 
@@ -28,6 +33,13 @@ function verifyToken(token: string): Record<string, unknown> | null {
   } catch {
     return null;
   }
+}
+
+function requireAuth(authorization?: string): Record<string, unknown> {
+  if (!authorization?.startsWith('Bearer ')) throw new UnauthorizedException('লগইন প্রয়োজন');
+  const payload = verifyToken(authorization.slice(7));
+  if (!payload) throw new UnauthorizedException('টোকেন অবৈধ বা মেয়াদোত্তীর্ণ');
+  return payload;
 }
 
 class LoginDto {
@@ -59,7 +71,6 @@ class AuthController {
   @Post('auth/login')
   async login(@Body() body: LoginDto) {
     const passwordHash = crypto.createHash('sha256').update(body.password).digest('hex');
-
     try {
       const user = await prisma.user.findUnique({ where: { email: body.email } });
       if (!user || passwordHash !== user.passwordHash) {
@@ -69,7 +80,6 @@ class AuthController {
       return { accessToken: token, user: { id: user.id, email: user.email, role: user.role, unionId: user.unionId } };
     } catch (err) {
       if (err instanceof UnauthorizedException) throw err;
-      // Database not connected — fallback demo login
       if (body.email === 'office@digitalseba.local' && body.password === 'Admin@123') {
         const token = signToken({ sub: 'demo-001', email: body.email, role: 'UNION_ADMIN', unionId: 'union-01' });
         return { accessToken: token, user: { id: 'demo-001', email: body.email, role: 'UNION_ADMIN', unionId: 'union-01' } };
@@ -80,19 +90,10 @@ class AuthController {
 
   @Get('auth/me')
   async me(@Headers('authorization') authorization?: string) {
-    if (!authorization?.startsWith('Bearer ')) throw new UnauthorizedException('লগইন প্রয়োজন');
-    const payload = verifyToken(authorization.slice(7));
-    if (!payload) throw new UnauthorizedException('টোকেন অবৈধ বা মেয়াদোত্তীর্ণ');
-
+    const payload = requireAuth(authorization);
     const user = await prisma.user.findUnique({ where: { id: payload.sub as string } });
     if (!user) throw new UnauthorizedException('ব্যবহারকারী পাওয়া যায়নি');
-
-    return {
-      id: user.id,
-      email: user.email,
-      role: user.role,
-      unionId: user.unionId,
-    };
+    return { id: user.id, email: user.email, role: user.role, unionId: user.unionId };
   }
 }
 
@@ -204,93 +205,126 @@ class PublicController {
     }
   }
 
+  @Post('applications/:trackingNo/documents')
+  @UseInterceptors(FilesInterceptor('documents', 5, { dest: UPLOAD_DIR, limits: { fileSize: 5 * 1024 * 1024 } }))
+  async uploadDocuments(
+    @Param('trackingNo') trackingNo: string,
+    @UploadedFiles() files: Express.Multer.File[],
+  ) {
+    if (!files || files.length === 0) throw new BadRequestException('No files uploaded');
+    const app = await prisma.application.findUnique({ where: { trackingNo } });
+    if (!app) throw new NotFoundException('Application not found');
+
+    const docs = await Promise.all(
+      files.map((f) =>
+        prisma.applicationDocument.create({
+          data: {
+            applicationId: app.id,
+            fileName: f.filename,
+            originalName: f.originalname,
+            mimeType: f.mimetype,
+            fileSize: f.size,
+            filePath: f.path,
+          },
+        }),
+      ),
+    );
+
+    return { success: true, count: docs.length, documents: docs.map((d) => ({ id: d.id, name: d.originalName, size: d.fileSize })) };
+  }
+
+  @Get('applications/:trackingNo/documents')
+  async getDocuments(@Param('trackingNo') trackingNo: string) {
+    const app = await prisma.application.findUnique({ where: { trackingNo }, include: { documents: true } });
+    if (!app) throw new NotFoundException('Application not found');
+    return app.documents.map((d) => ({ id: d.id, name: d.originalName, mimeType: d.mimeType, size: d.fileSize, createdAt: d.createdAt }));
+  }
+
   @Get('applications/track/:trackingNo')
   async trackApplication(@Param('trackingNo') trackingNo: string) {
     if (!trackingNo) throw new BadRequestException('Tracking number required');
-    try {
-      const app = await prisma.application.findUnique({ where: { trackingNo }, include: { service: true, union: true } });
-      if (!app) throw new BadRequestException('Application not found');
-      return { trackingNo: app.trackingNo, service: app.service.nameBn, status: app.status, createdAt: app.createdAt, applicant: app.applicant };
-    } catch (err) {
-      if (err instanceof BadRequestException) throw err;
-      return { trackingNo, service: 'Citizen Certificate Application', status: 'PENDING', createdAt: new Date(), applicant: {} };
-    }
+    const app = await prisma.application.findUnique({ where: { trackingNo }, include: { service: true } });
+    if (!app) throw new NotFoundException('Application not found');
+    return { trackingNo: app.trackingNo, service: app.service?.nameBn || 'Certificate', status: app.status, createdAt: app.createdAt, applicant: app.applicant };
   }
 
   @Get('certificates/:trackingNo')
   async getCertificate(@Param('trackingNo') trackingNo: string) {
-    try {
-      const app = await prisma.application.findUnique({ where: { trackingNo }, include: { service: true, union: true } });
-      if (!app) throw new BadRequestException('Certificate not found');
-      if (app.status !== 'APPROVED' && app.status !== 'ISSUED') {
-        return { error: 'NOT_APPROVED', message: 'This application has not been approved yet.', status: app.status };
-      }
-      return {
-        trackingNo: app.trackingNo,
-        certificateNo: `CIT-${app.trackingNo}`,
-        serviceName: app.service?.nameBn || 'Citizen Certificate',
-        applicant: app.applicant,
-        union: app.union?.nameBn || 'Union Parishad',
-        status: app.status,
-        issueDate: app.updatedAt || app.createdAt,
-        createdAt: app.createdAt,
-      };
-    } catch (err) {
-      if (err instanceof BadRequestException) throw err;
-      return {
-        trackingNo,
-        certificateNo: `CIT-${trackingNo}`,
-        serviceName: 'Citizen Certificate',
-        applicant: { fullName: 'Demo Applicant', fatherName: 'Demo Father', motherName: 'Demo Mother', mobile: '01712345678', address: 'Demo Village, Ward 03, Union 01', ward: '03', holdingNo: '123/45' },
-        union: 'Union Parishad',
-        status: 'APPROVED',
-        issueDate: new Date(),
-        createdAt: new Date(),
-      };
+    const app = await prisma.application.findUnique({ where: { trackingNo }, include: { service: true, union: true, certificate: true } });
+    if (!app) throw new NotFoundException('Application not found');
+    if (app.status !== 'APPROVED' && app.status !== 'ISSUED') {
+      return { error: 'NOT_APPROVED', message: 'This application has not been approved yet.', status: app.status };
     }
+    return {
+      trackingNo: app.trackingNo,
+      certificateNo: app.certificate?.certNo || `CIT-${app.trackingNo}`,
+      serviceName: app.service?.nameBn || 'Citizen Certificate',
+      applicant: app.applicant,
+      union: app.union?.nameBn || 'Union Parishad',
+      status: app.status,
+      issueDate: app.certificate?.issuedAt || app.updatedAt,
+      createdAt: app.createdAt,
+    };
   }
 
   @Get('admin/applications')
-  async adminApplications() {
-    try {
-      const apps = await prisma.application.findMany({ include: { service: true, union: true }, orderBy: { createdAt: 'desc' } });
-      return apps.map((app) => ({
-        id: app.id,
-        trackingNo: app.trackingNo,
-        serviceName: app.service?.nameBn || 'Unknown',
-        applicant: app.applicant,
-        status: app.status,
-        createdAt: app.createdAt,
-      }));
-    } catch {
-      return [];
-    }
+  async adminApplications(@Headers('authorization') authorization?: string) {
+    requireAuth(authorization);
+    const apps = await prisma.application.findMany({ include: { service: true, union: true, documents: true }, orderBy: { createdAt: 'desc' } });
+    return apps.map((app) => ({
+      id: app.id,
+      trackingNo: app.trackingNo,
+      serviceName: app.service?.nameBn || 'Unknown',
+      applicant: app.applicant,
+      status: app.status,
+      remarks: app.remarks,
+      documentCount: app.documents.length,
+      createdAt: app.createdAt,
+    }));
+  }
+
+  @Get('admin/applications/:trackingNo')
+  async adminApplicationDetail(@Param('trackingNo') trackingNo: string, @Headers('authorization') authorization?: string) {
+    requireAuth(authorization);
+    const app = await prisma.application.findUnique({ where: { trackingNo }, include: { service: true, union: true, documents: true } });
+    if (!app) throw new NotFoundException('Application not found');
+    return {
+      id: app.id,
+      trackingNo: app.trackingNo,
+      serviceName: app.service?.nameBn || 'Unknown',
+      applicant: app.applicant,
+      status: app.status,
+      remarks: app.remarks,
+      documents: app.documents.map((d) => ({ id: d.id, name: d.originalName, mimeType: d.mimeType, size: d.fileSize, createdAt: d.createdAt })),
+      createdAt: app.createdAt,
+    };
   }
 
   @Patch('admin/applications/:trackingNo/approve')
-  async approveApplication(@Param('trackingNo') trackingNo: string) {
+  async approveApplication(@Param('trackingNo') trackingNo: string, @Headers('authorization') authorization?: string) {
+    requireAuth(authorization);
+    const app = await prisma.application.findUnique({ where: { trackingNo } });
+    if (!app) throw new NotFoundException('Application not found');
+    await prisma.application.update({ where: { trackingNo }, data: { status: 'APPROVED' } });
+
+    const certNo = `CERT-${new Date().getFullYear()}-${String(Math.floor(Math.random() * 999999)).padStart(6, '0')}`;
     try {
-      const app = await prisma.application.findUnique({ where: { trackingNo } });
-      if (!app) throw new BadRequestException('Application not found');
-      await prisma.application.update({ where: { trackingNo }, data: { status: 'APPROVED' } });
-      return { success: true, trackingNo, status: 'APPROVED' };
-    } catch (err) {
-      if (err instanceof BadRequestException) throw err;
-      return { success: true, trackingNo, status: 'APPROVED' };
-    }
+      await prisma.certificate.create({
+        data: { certNo, applicationId: app.id, issuedAt: new Date() },
+      });
+      await prisma.application.update({ where: { trackingNo }, data: { status: 'ISSUED' } });
+    } catch { /* cert may already exist */ }
+
+    return { success: true, trackingNo, status: 'ISSUED', certificateNo: certNo };
   }
 
   @Patch('admin/applications/:trackingNo/reject')
-  async rejectApplication(@Param('trackingNo') trackingNo: string, @Body() body?: { remarks?: string }) {
-    try {
-      const app = await prisma.application.findUnique({ where: { trackingNo } });
-      if (!app) throw new BadRequestException('Application not found');
-      await prisma.application.update({ where: { trackingNo }, data: { status: 'REJECTED', remarks: body?.remarks || 'Rejected by admin' } });
-      return { success: true, trackingNo, status: 'REJECTED' };
-    } catch (err) {
-      if (err instanceof BadRequestException) throw err;
-      return { success: true, trackingNo, status: 'REJECTED' };
-    }
+  async rejectApplication(@Param('trackingNo') trackingNo: string, @Body() body: { remarks?: string }, @Headers('authorization') authorization?: string) {
+    requireAuth(authorization);
+    const app = await prisma.application.findUnique({ where: { trackingNo } });
+    if (!app) throw new NotFoundException('Application not found');
+    await prisma.application.update({ where: { trackingNo }, data: { status: 'REJECTED', remarks: body?.remarks || 'Rejected by admin' } });
+    return { success: true, trackingNo, status: 'REJECTED' };
   }
 }
 

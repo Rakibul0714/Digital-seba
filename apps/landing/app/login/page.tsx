@@ -2,11 +2,7 @@
 import { FormEvent, useState } from 'react';
 import { ArrowLeft, ArrowRight, Landmark, LockKeyhole, Mail } from 'lucide-react';
 
-const API_BASE = typeof window !== 'undefined'
-  ? `${window.location.protocol}//${window.location.hostname}:4000`
-  : '';
-
-export default function LoginPage() {
+export default function Login() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
@@ -17,7 +13,7 @@ export default function LoginPage() {
     setError('');
     setLoading(true);
     try {
-      const response = await fetch(`${API_BASE}/api/v1/auth/login`, {
+      const response = await fetch('/api/v1/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email, password }),
@@ -26,7 +22,7 @@ export default function LoginPage() {
       if (!response.ok) throw new Error(payload.message || 'Login failed');
       const token = encodeURIComponent(payload.accessToken);
       const user = encodeURIComponent(JSON.stringify(payload.user));
-      window.location.href = `${window.location.protocol}//${window.location.hostname}:3001/admin/dashboard?token=${token}&user=${user}`;
+      window.location.href = `${window.location.origin}/admin/dashboard?token=${token}&user=${user}`;
     } catch (loginError) {
       setError(loginError instanceof Error ? loginError.message : 'Email or password is incorrect');
     } finally {

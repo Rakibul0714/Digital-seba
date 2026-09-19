@@ -115,6 +115,19 @@ model Application {
   service     Service           @relation(fields: [serviceId], references: [id])
   union       Union             @relation(fields: [unionId], references: [id])
   certificate Certificate?
+  documents   ApplicationDocument[]
+}
+
+model ApplicationDocument {
+  id            String      @id @default(cuid())
+  applicationId String
+  fileName      String
+  originalName  String
+  mimeType      String
+  fileSize      Int
+  filePath      String
+  createdAt     DateTime    @default(now())
+  application   Application @relation(fields: [applicationId], references: [id])
 }
 
 model Certificate {
