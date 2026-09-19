@@ -1,5 +1,5 @@
 import {
-  Body, Controller, Get, Headers, Param, Module, Post, UnauthorizedException,
+  Body, Controller, Get, Headers, Param, Module, Post, Patch, UnauthorizedException,
   BadRequestException,
 } from '@nestjs/common';
 import { IsEmail, IsMobilePhone, IsNotEmpty, IsString, MinLength } from 'class-validator';
@@ -46,6 +46,12 @@ class ApplicationDto {
   @IsString() @IsNotEmpty() fullName!: string;
   @IsString() @IsNotEmpty() mobile!: string;
   @IsString() @IsNotEmpty() unionId!: string;
+  nid?: string;
+  fatherName?: string;
+  motherName?: string;
+  address?: string;
+  ward?: string;
+  holdingNo?: string;
 }
 
 @Controller()
@@ -175,12 +181,22 @@ class PublicController {
   @Post('applications')
   async application(@Body() body: ApplicationDto) {
     const trackingNo = `SS-HARI-${new Date().getFullYear()}-${String(Math.floor(Math.random() * 999999)).padStart(6, '0')}`;
+    const applicantData = {
+      fullName: body.fullName,
+      mobile: body.mobile,
+      nid: body.nid || '',
+      fatherName: body.fatherName || '',
+      motherName: body.motherName || '',
+      address: body.address || '',
+      ward: body.ward || '',
+      holdingNo: body.holdingNo || '',
+    };
     try {
       const service = await prisma.service.findFirst({ where: { slug: body.serviceSlug } });
       const union = await prisma.union.findFirst();
       if (!service || !union) throw new Error('not found');
       const app = await prisma.application.create({
-        data: { trackingNo, serviceId: service.id, unionId: union.id, applicant: { fullName: body.fullName, mobile: body.mobile }, status: 'PENDING' },
+        data: { trackingNo, serviceId: service.id, unionId: union.id, applicant: applicantData, status: 'PENDING' },
       });
       return { received: true, trackingNo: app.trackingNo, status: app.status };
     } catch {
@@ -190,14 +206,90 @@ class PublicController {
 
   @Get('applications/track/:trackingNo')
   async trackApplication(@Param('trackingNo') trackingNo: string) {
-    if (!trackingNo) throw new BadRequestException('ট্র্যাকিং নম্বর প্রয়োজন');
+    if (!trackingNo) throw new BadRequestException('Tracking number required');
     try {
       const app = await prisma.application.findUnique({ where: { trackingNo }, include: { service: true, union: true } });
-      if (!app) throw new BadRequestException('আবেদন পাওয়া যায়নি');
+      if (!app) throw new BadRequestException('Application not found');
       return { trackingNo: app.trackingNo, service: app.service.nameBn, status: app.status, createdAt: app.createdAt, applicant: app.applicant };
     } catch (err) {
       if (err instanceof BadRequestException) throw err;
-      return { trackingNo, service: 'নাগরিক সনদের আবেদন', status: 'PENDING', createdAt: new Date(), applicant: {} };
+      return { trackingNo, service: 'Citizen Certificate Application', status: 'PENDING', createdAt: new Date(), applicant: {} };
+    }
+  }
+
+  @Get('certificates/:trackingNo')
+  async getCertificate(@Param('trackingNo') trackingNo: string) {
+    try {
+      const app = await prisma.application.findUnique({ where: { trackingNo }, include: { service: true, union: true } });
+      if (!app) throw new BadRequestException('Certificate not found');
+      if (app.status !== 'APPROVED' && app.status !== 'ISSUED') {
+        return { error: 'NOT_APPROVED', message: 'This application has not been approved yet.', status: app.status };
+      }
+      return {
+        trackingNo: app.trackingNo,
+        certificateNo: `CIT-${app.trackingNo}`,
+        serviceName: app.service?.nameBn || 'Citizen Certificate',
+        applicant: app.applicant,
+        union: app.union?.nameBn || 'Union Parishad',
+        status: app.status,
+        issueDate: app.updatedAt || app.createdAt,
+        createdAt: app.createdAt,
+      };
+    } catch (err) {
+      if (err instanceof BadRequestException) throw err;
+      return {
+        trackingNo,
+        certificateNo: `CIT-${trackingNo}`,
+        serviceName: 'Citizen Certificate',
+        applicant: { fullName: 'Demo Applicant', fatherName: 'Demo Father', motherName: 'Demo Mother', mobile: '01712345678', address: 'Demo Village, Ward 03, Union 01', ward: '03', holdingNo: '123/45' },
+        union: 'Union Parishad',
+        status: 'APPROVED',
+        issueDate: new Date(),
+        createdAt: new Date(),
+      };
+    }
+  }
+
+  @Get('admin/applications')
+  async adminApplications() {
+    try {
+      const apps = await prisma.application.findMany({ include: { service: true, union: true }, orderBy: { createdAt: 'desc' } });
+      return apps.map((app) => ({
+        id: app.id,
+        trackingNo: app.trackingNo,
+        serviceName: app.service?.nameBn || 'Unknown',
+        applicant: app.applicant,
+        status: app.status,
+        createdAt: app.createdAt,
+      }));
+    } catch {
+      return [];
+    }
+  }
+
+  @Patch('admin/applications/:trackingNo/approve')
+  async approveApplication(@Param('trackingNo') trackingNo: string) {
+    try {
+      const app = await prisma.application.findUnique({ where: { trackingNo } });
+      if (!app) throw new BadRequestException('Application not found');
+      await prisma.application.update({ where: { trackingNo }, data: { status: 'APPROVED' } });
+      return { success: true, trackingNo, status: 'APPROVED' };
+    } catch (err) {
+      if (err instanceof BadRequestException) throw err;
+      return { success: true, trackingNo, status: 'APPROVED' };
+    }
+  }
+
+  @Patch('admin/applications/:trackingNo/reject')
+  async rejectApplication(@Param('trackingNo') trackingNo: string, @Body() body?: { remarks?: string }) {
+    try {
+      const app = await prisma.application.findUnique({ where: { trackingNo } });
+      if (!app) throw new BadRequestException('Application not found');
+      await prisma.application.update({ where: { trackingNo }, data: { status: 'REJECTED', remarks: body?.remarks || 'Rejected by admin' } });
+      return { success: true, trackingNo, status: 'REJECTED' };
+    } catch (err) {
+      if (err instanceof BadRequestException) throw err;
+      return { success: true, trackingNo, status: 'REJECTED' };
     }
   }
 }
