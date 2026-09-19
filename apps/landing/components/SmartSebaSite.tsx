@@ -176,8 +176,9 @@ function ServiceModal({ service, onClose }: { service: Service; onClose: () => v
   const [error, setError] = useState('');
   const [step, setStep] = useState(1);
   const [files, setFiles] = useState<File[]>([]);
-  const formRef = useRef<HTMLFormElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [form, setForm] = useState({ nid: '', name: '', guardian: '', mother: '', mobile: '', union: 'union-01', ward: '01', holding: '', address: '' });
+  const set = (key: string, val: string) => setForm((prev) => ({ ...prev, [key]: val }));
 
   const handleFiles = (newFiles: FileList | null) => {
     if (!newFiles) return;
@@ -189,29 +190,26 @@ function ServiceModal({ service, onClose }: { service: Service; onClose: () => v
     setFiles((prev) => prev.filter((_, i) => i !== index));
   };
 
-  const submit = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
+  const canNextStep2 = form.nid.trim() && form.name.trim() && form.guardian.trim() && form.mother.trim() && form.mobile.trim() && form.address.trim();
+
+  const submit = async () => {
     setLoading(true);
     setError('');
     try {
-      const form = event.currentTarget;
-      const formData = new FormData(form);
-      const data = Object.fromEntries(formData.entries());
-
       const response = await fetch('/api/v1/applications', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           serviceSlug: `service-${service.id}`,
-          fullName: data.name || data.nid || 'Unknown',
-          mobile: data.mobile || '',
-          unionId: data.union || 'union-01',
-          nid: data.nid || '',
-          fatherName: data.guardian || '',
-          motherName: data.mother || '',
-          address: data.address || '',
-          ward: data.ward || '',
-          holdingNo: data.holding || '',
+          fullName: form.name || form.nid || 'Unknown',
+          mobile: form.mobile,
+          unionId: form.union,
+          nid: form.nid,
+          fatherName: form.guardian,
+          motherName: form.mother,
+          address: form.address,
+          ward: form.ward,
+          holdingNo: form.holding,
         }),
       });
       const result = await response.json();
@@ -220,10 +218,7 @@ function ServiceModal({ service, onClose }: { service: Service; onClose: () => v
       if (files.length > 0 && result.trackingNo) {
         const docForm = new FormData();
         files.forEach((f) => docForm.append('documents', f));
-        await fetch(`/api/v1/applications/${result.trackingNo}/documents`, {
-          method: 'POST',
-          body: docForm,
-        });
+        await fetch(`/api/v1/applications/${result.trackingNo}/documents`, { method: 'POST', body: docForm });
       }
 
       setTrackingNo(result.trackingNo);
@@ -250,7 +245,7 @@ function ServiceModal({ service, onClose }: { service: Service; onClose: () => v
         })}
       </div>
 
-      <form ref={formRef} onSubmit={submit}>
+      <form onSubmit={(e) => { e.preventDefault(); submit(); }}>
 
         {step === 1 && <div style={stepStyle}>
           <div style={{ background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 12, padding: 16 }}>
@@ -271,19 +266,19 @@ function ServiceModal({ service, onClose }: { service: Service; onClose: () => v
 
         {step === 2 && <div style={stepStyle}>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
-            <div style={fieldStyle}><label style={labelStyle}>NID Number</label><input name="nid" placeholder="10 or 17 digit NID" required style={inputStyle} /></div>
-            <div style={fieldStyle}><label style={labelStyle}>Full Name</label><input name="name" placeholder="Your full name" required style={inputStyle} /></div>
-            <div style={fieldStyle}><label style={labelStyle}>Father/Husband's Name</label><input name="guardian" placeholder="Father or Husband's Name" required style={inputStyle} /></div>
-            <div style={fieldStyle}><label style={labelStyle}>Mother's Name</label><input name="mother" placeholder="Mother's Name" required style={inputStyle} /></div>
-            <div style={fieldStyle}><label style={labelStyle}>Mobile Number</label><input name="mobile" placeholder="01788812345" required style={inputStyle} /></div>
-            <div style={fieldStyle}><label style={labelStyle}>Union</label><select name="union" defaultValue="union-01" style={inputStyle}><option value="union-01">Union 01</option><option value="union-02">Union 02</option></select></div>
-            <div style={fieldStyle}><label style={labelStyle}>Ward</label><select name="ward" defaultValue="01" style={inputStyle}><option value="01">Ward 01</option><option value="02">Ward 02</option><option value="03">Ward 03</option><option value="04">Ward 04</option><option value="05">Ward 05</option></select></div>
-            <div style={fieldStyle}><label style={labelStyle}>Holding Number</label><input name="holding" placeholder="e.g. 123/45" style={inputStyle} /></div>
+            <div style={fieldStyle}><label style={labelStyle}>NID Number</label><input value={form.nid} onChange={(e) => set('nid', e.target.value)} placeholder="10 or 17 digit NID" required style={inputStyle} /></div>
+            <div style={fieldStyle}><label style={labelStyle}>Full Name</label><input value={form.name} onChange={(e) => set('name', e.target.value)} placeholder="Your full name" required style={inputStyle} /></div>
+            <div style={fieldStyle}><label style={labelStyle}>Father/Husband's Name</label><input value={form.guardian} onChange={(e) => set('guardian', e.target.value)} placeholder="Father or Husband's Name" required style={inputStyle} /></div>
+            <div style={fieldStyle}><label style={labelStyle}>Mother's Name</label><input value={form.mother} onChange={(e) => set('mother', e.target.value)} placeholder="Mother's Name" required style={inputStyle} /></div>
+            <div style={fieldStyle}><label style={labelStyle}>Mobile Number</label><input value={form.mobile} onChange={(e) => set('mobile', e.target.value)} placeholder="01788812345" required style={inputStyle} /></div>
+            <div style={fieldStyle}><label style={labelStyle}>Union</label><select value={form.union} onChange={(e) => set('union', e.target.value)} style={inputStyle}><option value="union-01">Union 01</option><option value="union-02">Union 02</option></select></div>
+            <div style={fieldStyle}><label style={labelStyle}>Ward</label><select value={form.ward} onChange={(e) => set('ward', e.target.value)} style={inputStyle}><option value="01">Ward 01</option><option value="02">Ward 02</option><option value="03">Ward 03</option><option value="04">Ward 04</option><option value="05">Ward 05</option></select></div>
+            <div style={fieldStyle}><label style={labelStyle}>Holding Number</label><input value={form.holding} onChange={(e) => set('holding', e.target.value)} placeholder="e.g. 123/45" style={inputStyle} /></div>
           </div>
-          <div style={fieldStyle}><label style={labelStyle}>Current Address</label><textarea name="address" placeholder="Village, Post Office, Ward, Union" required style={{ ...inputStyle, minHeight: 60, resize: 'vertical' }} /></div>
+          <div style={fieldStyle}><label style={labelStyle}>Current Address</label><textarea value={form.address} onChange={(e) => set('address', e.target.value)} placeholder="Village, Post Office, Ward, Union" required style={{ ...inputStyle, minHeight: 60, resize: 'vertical' }} /></div>
           <div style={stepBtnRow}>
             <button type="button" onClick={() => setStep(1)} style={secondaryBtn}>Back</button>
-            <button type="button" onClick={() => setStep(3)} style={primaryBtn}>Next Step <ArrowRight size={15} /></button>
+            <button type="button" onClick={() => setStep(3)} disabled={!canNextStep2} style={{ ...primaryBtn, opacity: canNextStep2 ? 1 : 0.5 }}>Next Step <ArrowRight size={15} /></button>
           </div>
         </div>}
 

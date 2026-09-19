@@ -3,7 +3,7 @@ import {
   UploadedFiles, UnauthorizedException, BadRequestException, NotFoundException,
 } from '@nestjs/common';
 import { FilesInterceptor } from '@nestjs/platform-express';
-import { IsEmail, IsNotEmpty, IsString, MinLength } from 'class-validator';
+import { IsEmail, IsNotEmpty, IsOptional, IsString, MinLength } from 'class-validator';
 import { PrismaClient } from '@prisma/client';
 import * as crypto from 'crypto';
 import * as fs from 'fs';
@@ -12,6 +12,23 @@ import * as path from 'path';
 const prisma = new PrismaClient();
 const UPLOAD_DIR = path.join(__dirname, '..', 'uploads');
 if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+
+let dbConnected = false;
+prisma.$connect().then(() => { dbConnected = true; console.log('[DB] Connected'); }).catch(() => { dbConnected = false; console.log('[DB] Not available - using in-memory store'); });
+
+type MemDoc = { id: string; applicationId: string; fileName: string; originalName: string; mimeType: string; fileSize: number; filePath: string; createdAt: Date };
+type MemApp = { id: string; trackingNo: string; serviceName: string; applicant: Record<string, string>; status: string; remarks: string; documents: MemDoc[]; createdAt: Date; certNo?: string; issuedAt?: Date };
+const memApps: Map<string, MemApp> = new Map();
+const SERVICE_MAP: Record<string, string> = {
+  'service-1': 'Citizen Certificate', 'service-2': 'Heir Certificate', 'service-3': 'Character Certificate',
+  'service-4': 'Death Certificate', 'service-5': 'No Re-marriage Certificate', 'service-6': 'Disability Certificate',
+  'service-7': 'Electricity Certificate', 'service-8': 'Voter Transfer', 'service-9': 'Guardian Income',
+  'service-10': 'Freedom Fighter', 'service-11': 'Freedom Fighter Child', 'service-12': 'Same Name',
+  'service-13': 'Ethnic Minority', 'service-14': 'Profession Related', 'service-15': 'Heirship Certificate',
+  'service-16': 'Unmarried Certificate', 'service-17': 'Certification', 'service-18': 'Landless Certificate',
+  'service-19': 'NID Correction', 'service-20': 'Voter Registration', 'service-21': 'Childless Certificate',
+  'service-22': 'No Electricity', 'service-23': 'Char Area No Electricity', 'service-24': 'Trade License',
+};
 
 const JWT_SECRET = process.env.JWT_SECRET || 'digital-seba-jwt-secret-change-in-production-2026';
 
@@ -58,12 +75,12 @@ class ApplicationDto {
   @IsString() @IsNotEmpty() fullName!: string;
   @IsString() @IsNotEmpty() mobile!: string;
   @IsString() @IsNotEmpty() unionId!: string;
-  nid?: string;
-  fatherName?: string;
-  motherName?: string;
-  address?: string;
-  ward?: string;
-  holdingNo?: string;
+  @IsOptional() @IsString() nid?: string;
+  @IsOptional() @IsString() fatherName?: string;
+  @IsOptional() @IsString() motherName?: string;
+  @IsOptional() @IsString() address?: string;
+  @IsOptional() @IsString() ward?: string;
+  @IsOptional() @IsString() holdingNo?: string;
 }
 
 @Controller()
@@ -192,17 +209,23 @@ class PublicController {
       ward: body.ward || '',
       holdingNo: body.holdingNo || '',
     };
-    try {
-      const service = await prisma.service.findFirst({ where: { slug: body.serviceSlug } });
-      const union = await prisma.union.findFirst();
-      if (!service || !union) throw new Error('not found');
-      const app = await prisma.application.create({
-        data: { trackingNo, serviceId: service.id, unionId: union.id, applicant: applicantData, status: 'PENDING' },
-      });
-      return { received: true, trackingNo: app.trackingNo, status: app.status };
-    } catch {
-      return { received: true, trackingNo, status: 'PENDING' };
+    const serviceName = SERVICE_MAP[body.serviceSlug] || 'Certificate';
+
+    if (dbConnected) {
+      try {
+        const service = await prisma.service.findFirst({ where: { slug: body.serviceSlug } });
+        const union = await prisma.union.findFirst();
+        if (!service || !union) throw new Error('not found');
+        const app = await prisma.application.create({
+          data: { trackingNo, serviceId: service.id, unionId: union.id, applicant: applicantData, status: 'PENDING' },
+        });
+        return { received: true, trackingNo: app.trackingNo, status: app.status };
+      } catch { /* fall through to memory */ }
     }
+
+    const id = crypto.randomUUID();
+    memApps.set(trackingNo, { id, trackingNo, serviceName, applicant: applicantData as Record<string, string>, status: 'PENDING', remarks: '', documents: [], createdAt: new Date() });
+    return { received: true, trackingNo, status: 'PENDING' };
   }
 
   @Post('applications/:trackingNo/documents')
@@ -243,26 +266,52 @@ class PublicController {
   @Get('applications/track/:trackingNo')
   async trackApplication(@Param('trackingNo') trackingNo: string) {
     if (!trackingNo) throw new BadRequestException('Tracking number required');
-    const app = await prisma.application.findUnique({ where: { trackingNo }, include: { service: true } });
+    if (dbConnected) {
+      try {
+        const app = await prisma.application.findUnique({ where: { trackingNo }, include: { service: true } });
+        if (!app) throw new NotFoundException('Application not found');
+        return { trackingNo: app.trackingNo, service: app.service?.nameBn || 'Certificate', status: app.status, createdAt: app.createdAt, applicant: app.applicant };
+      } catch (e) { if (!(e instanceof NotFoundException)) { /* fall through */ } else throw e; }
+    }
+    const app = memApps.get(trackingNo);
     if (!app) throw new NotFoundException('Application not found');
-    return { trackingNo: app.trackingNo, service: app.service?.nameBn || 'Certificate', status: app.status, createdAt: app.createdAt, applicant: app.applicant };
+    return { trackingNo: app.trackingNo, service: app.serviceName, status: app.status, createdAt: app.createdAt, applicant: app.applicant };
   }
 
   @Get('certificates/:trackingNo')
   async getCertificate(@Param('trackingNo') trackingNo: string) {
-    const app = await prisma.application.findUnique({ where: { trackingNo }, include: { service: true, union: true, certificate: true } });
+    if (dbConnected) {
+      try {
+        const app = await prisma.application.findUnique({ where: { trackingNo }, include: { service: true, union: true, certificate: true } });
+        if (!app) throw new NotFoundException('Application not found');
+        if (app.status !== 'APPROVED' && app.status !== 'ISSUED') {
+          return { error: 'NOT_APPROVED', message: 'This application has not been approved yet.', status: app.status };
+        }
+        return {
+          trackingNo: app.trackingNo,
+          certificateNo: app.certificate?.certNo || `CIT-${app.trackingNo}`,
+          serviceName: app.service?.nameBn || 'Citizen Certificate',
+          applicant: app.applicant,
+          union: app.union?.nameBn || 'Union Parishad',
+          status: app.status,
+          issueDate: app.certificate?.issuedAt || app.updatedAt,
+          createdAt: app.createdAt,
+        };
+      } catch (e) { if (!(e instanceof NotFoundException)) { /* fall through */ } else throw e; }
+    }
+    const app = memApps.get(trackingNo);
     if (!app) throw new NotFoundException('Application not found');
     if (app.status !== 'APPROVED' && app.status !== 'ISSUED') {
       return { error: 'NOT_APPROVED', message: 'This application has not been approved yet.', status: app.status };
     }
     return {
       trackingNo: app.trackingNo,
-      certificateNo: app.certificate?.certNo || `CIT-${app.trackingNo}`,
-      serviceName: app.service?.nameBn || 'Citizen Certificate',
+      certificateNo: app.certNo || `CIT-${app.trackingNo}`,
+      serviceName: app.serviceName,
       applicant: app.applicant,
-      union: app.union?.nameBn || 'Union Parishad',
+      union: 'Union Parishad',
       status: app.status,
-      issueDate: app.certificate?.issuedAt || app.updatedAt,
+      issueDate: app.issuedAt || app.createdAt,
       createdAt: app.createdAt,
     };
   }
@@ -270,31 +319,47 @@ class PublicController {
   @Get('admin/applications')
   async adminApplications(@Headers('authorization') authorization?: string) {
     requireAuth(authorization);
-    const apps = await prisma.application.findMany({ include: { service: true, union: true, documents: true }, orderBy: { createdAt: 'desc' } });
-    return apps.map((app) => ({
-      id: app.id,
-      trackingNo: app.trackingNo,
-      serviceName: app.service?.nameBn || 'Unknown',
-      applicant: app.applicant,
-      status: app.status,
-      remarks: app.remarks,
-      documentCount: app.documents.length,
-      createdAt: app.createdAt,
+    if (dbConnected) {
+      try {
+        const apps = await prisma.application.findMany({ include: { service: true, union: true, documents: true }, orderBy: { createdAt: 'desc' } });
+        return apps.map((app) => ({
+          id: app.id,
+          trackingNo: app.trackingNo,
+          serviceName: app.service?.nameBn || 'Unknown',
+          applicant: app.applicant,
+          status: app.status,
+          remarks: app.remarks,
+          documentCount: app.documents.length,
+          createdAt: app.createdAt,
+        }));
+      } catch { /* fall through */ }
+    }
+    return Array.from(memApps.values()).sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime()).map((a) => ({
+      id: a.id, trackingNo: a.trackingNo, serviceName: a.serviceName, applicant: a.applicant,
+      status: a.status, remarks: a.remarks, documentCount: a.documents.length, createdAt: a.createdAt,
     }));
   }
 
   @Get('admin/applications/:trackingNo')
   async adminApplicationDetail(@Param('trackingNo') trackingNo: string, @Headers('authorization') authorization?: string) {
     requireAuth(authorization);
-    const app = await prisma.application.findUnique({ where: { trackingNo }, include: { service: true, union: true, documents: true } });
+    if (dbConnected) {
+      try {
+        const app = await prisma.application.findUnique({ where: { trackingNo }, include: { service: true, union: true, documents: true } });
+        if (!app) throw new NotFoundException('Application not found');
+        return {
+          id: app.id, trackingNo: app.trackingNo, serviceName: app.service?.nameBn || 'Unknown',
+          applicant: app.applicant, status: app.status, remarks: app.remarks,
+          documents: app.documents.map((d) => ({ id: d.id, name: d.originalName, mimeType: d.mimeType, size: d.fileSize, createdAt: d.createdAt })),
+          createdAt: app.createdAt,
+        };
+      } catch (e) { if (e instanceof NotFoundException) throw e; }
+    }
+    const app = memApps.get(trackingNo);
     if (!app) throw new NotFoundException('Application not found');
     return {
-      id: app.id,
-      trackingNo: app.trackingNo,
-      serviceName: app.service?.nameBn || 'Unknown',
-      applicant: app.applicant,
-      status: app.status,
-      remarks: app.remarks,
+      id: app.id, trackingNo: app.trackingNo, serviceName: app.serviceName,
+      applicant: app.applicant, status: app.status, remarks: app.remarks,
       documents: app.documents.map((d) => ({ id: d.id, name: d.originalName, mimeType: d.mimeType, size: d.fileSize, createdAt: d.createdAt })),
       createdAt: app.createdAt,
     };
@@ -303,27 +368,43 @@ class PublicController {
   @Patch('admin/applications/:trackingNo/approve')
   async approveApplication(@Param('trackingNo') trackingNo: string, @Headers('authorization') authorization?: string) {
     requireAuth(authorization);
-    const app = await prisma.application.findUnique({ where: { trackingNo } });
-    if (!app) throw new NotFoundException('Application not found');
-    await prisma.application.update({ where: { trackingNo }, data: { status: 'APPROVED' } });
-
     const certNo = `CERT-${new Date().getFullYear()}-${String(Math.floor(Math.random() * 999999)).padStart(6, '0')}`;
-    try {
-      await prisma.certificate.create({
-        data: { certNo, applicationId: app.id, issuedAt: new Date() },
-      });
-      await prisma.application.update({ where: { trackingNo }, data: { status: 'ISSUED' } });
-    } catch { /* cert may already exist */ }
 
+    if (dbConnected) {
+      try {
+        const app = await prisma.application.findUnique({ where: { trackingNo } });
+        if (!app) throw new NotFoundException('Application not found');
+        await prisma.application.update({ where: { trackingNo }, data: { status: 'APPROVED' } });
+        try {
+          await prisma.certificate.create({ data: { certNo, applicationId: app.id, issuedAt: new Date() } });
+          await prisma.application.update({ where: { trackingNo }, data: { status: 'ISSUED' } });
+        } catch { /* cert may already exist */ }
+        return { success: true, trackingNo, status: 'ISSUED', certificateNo: certNo };
+      } catch (e) { if (e instanceof NotFoundException) throw e; }
+    }
+    const app = memApps.get(trackingNo);
+    if (!app) throw new NotFoundException('Application not found');
+    app.status = 'ISSUED';
+    app.certNo = certNo;
+    app.issuedAt = new Date();
     return { success: true, trackingNo, status: 'ISSUED', certificateNo: certNo };
   }
 
   @Patch('admin/applications/:trackingNo/reject')
   async rejectApplication(@Param('trackingNo') trackingNo: string, @Body() body: { remarks?: string }, @Headers('authorization') authorization?: string) {
     requireAuth(authorization);
-    const app = await prisma.application.findUnique({ where: { trackingNo } });
+    if (dbConnected) {
+      try {
+        const app = await prisma.application.findUnique({ where: { trackingNo } });
+        if (!app) throw new NotFoundException('Application not found');
+        await prisma.application.update({ where: { trackingNo }, data: { status: 'REJECTED', remarks: body?.remarks || 'Rejected by admin' } });
+        return { success: true, trackingNo, status: 'REJECTED' };
+      } catch (e) { if (e instanceof NotFoundException) throw e; }
+    }
+    const app = memApps.get(trackingNo);
     if (!app) throw new NotFoundException('Application not found');
-    await prisma.application.update({ where: { trackingNo }, data: { status: 'REJECTED', remarks: body?.remarks || 'Rejected by admin' } });
+    app.status = 'REJECTED';
+    app.remarks = body?.remarks || 'Rejected by admin';
     return { success: true, trackingNo, status: 'REJECTED' };
   }
 }

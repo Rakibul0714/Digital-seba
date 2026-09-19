@@ -1,4 +1,4 @@
-'use client';
+﻿'use client';
 
 import { FormEvent, useState, useRef } from 'react';
 import { ArrowLeft, ArrowRight, Download, Landmark, Loader2, Search, CheckCircle2 } from 'lucide-react';
@@ -40,19 +40,25 @@ export default function CertificateDownloadPage() {
     try {
       const html2canvas = (await import('html2canvas')).default;
       const { jsPDF } = await import('jspdf');
-
-      const canvas = await html2canvas(certRef.current, {
+      const el = certRef.current;
+      const canvas = await html2canvas(el, {
         scale: 2,
         useCORS: true,
         logging: false,
         backgroundColor: '#ffffff',
+        width: el.scrollWidth,
+        height: el.scrollHeight,
+        windowWidth: el.scrollWidth,
+        windowHeight: el.scrollHeight,
       });
-
       const imgData = canvas.toDataURL('image/png');
       const pdf = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
       const pdfWidth = pdf.internal.pageSize.getWidth();
       const pdfHeight = pdf.internal.pageSize.getHeight();
-      pdf.addImage(imgData, 'PNG', 0, 0, pdfWidth, pdfHeight);
+      const ratio = Math.min(pdfWidth / canvas.width, pdfHeight / canvas.height);
+      const w = canvas.width * ratio;
+      const h = canvas.height * ratio;
+      pdf.addImage(imgData, 'PNG', (pdfWidth - w) / 2, (pdfHeight - h) / 2, w, h);
       pdf.save(`Certificate-${data?.certificateNo || trackingNo}.pdf`);
     } catch (err) {
       console.error('PDF generation failed:', err);
@@ -63,26 +69,9 @@ export default function CertificateDownloadPage() {
 
   return (
     <main style={{ minHeight: '100vh', background: '#fafaf7' }}>
-      {/* Header */}
-      <header style={{
-        height: '72px',
-        background: 'rgba(250,250,247,0.92)',
-        backdropFilter: 'blur(16px)',
-        borderBottom: '1px solid #dcebe1',
-        display: 'flex',
-        alignItems: 'center',
-        padding: '0 clamp(20px, 5vw, 60px)',
-      }}>
+      <header style={{ height: '72px', background: 'rgba(250,250,247,0.92)', backdropFilter: 'blur(16px)', borderBottom: '1px solid #dcebe1', display: 'flex', alignItems: 'center', padding: '0 clamp(20px, 5vw, 60px)' }}>
         <a href="/" style={{ display: 'flex', alignItems: 'center', gap: '10px', textDecoration: 'none', color: '#1a3a2c' }}>
-          <div style={{
-            width: '38px',
-            height: '38px',
-            borderRadius: '11px',
-            background: 'linear-gradient(145deg, #087f5b, #004c39)',
-            display: 'grid',
-            placeItems: 'center',
-            color: '#fff',
-          }}>
+          <div style={{ width: '38px', height: '38px', borderRadius: '11px', background: 'linear-gradient(145deg, #087f5b, #004c39)', display: 'grid', placeItems: 'center', color: '#fff' }}>
             <Landmark size={20} />
           </div>
           <div>
@@ -92,12 +81,7 @@ export default function CertificateDownloadPage() {
         </a>
       </header>
 
-      {/* Page Hero */}
-      <div style={{
-        background: 'linear-gradient(135deg, #064a37, #006a4e)',
-        padding: '36px clamp(20px, 5vw, 60px)',
-        color: '#fff',
-      }}>
+      <div style={{ background: 'linear-gradient(135deg, #064a37, #006a4e)', padding: '36px clamp(20px, 5vw, 60px)', color: '#fff' }}>
         <div style={{ maxWidth: '1180px', margin: '0 auto' }}>
           <a href="/" style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', color: '#96c3a9', fontSize: '12px', textDecoration: 'none', marginBottom: '14px' }}>
             <ArrowLeft size={14} /> Homepage
@@ -107,136 +91,44 @@ export default function CertificateDownloadPage() {
         </div>
       </div>
 
-      {/* Content */}
       <div style={{ maxWidth: '1180px', margin: '0 auto', padding: '40px clamp(20px, 5vw, 60px)' }}>
-        {/* Search Form */}
-        <form onSubmit={handleSearch} style={{
-          display: 'flex',
-          gap: '12px',
-          maxWidth: '600px',
-          margin: '0 auto 40px',
-        }}>
-          <div style={{
-            flex: 1,
-            display: 'flex',
-            alignItems: 'center',
-            gap: '10px',
-            border: '2px solid #d4e5da',
-            borderRadius: '12px',
-            padding: '12px 16px',
-            background: '#fff',
-            transition: '0.2s',
-          }}>
+        <form onSubmit={handleSearch} style={{ display: 'flex', gap: '12px', maxWidth: '600px', margin: '0 auto 40px' }}>
+          <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: '10px', border: '2px solid #d4e5da', borderRadius: '12px', padding: '12px 16px', background: '#fff' }}>
             <Search size={18} color="#7f9e8e" />
-            <input
-              type="text"
-              value={trackingNo}
-              onChange={(e) => setTrackingNo(e.target.value)}
-              placeholder="Enter tracking number (e.g. SS-HARI-2026-004281)"
-              style={{ border: '0', outline: '0', background: '0', width: '100%', fontSize: '14px', color: '#1f302c' }}
-            />
+            <input type="text" value={trackingNo} onChange={(e) => setTrackingNo(e.target.value)} placeholder="Enter tracking number" style={{ border: '0', outline: '0', background: '0', width: '100%', fontSize: '14px', color: '#1f302c' }} />
           </div>
-          <button type="submit" disabled={loading || !trackingNo.trim()} style={{
-            padding: '12px 24px',
-            background: '#0a7255',
-            color: '#fff',
-            border: '0',
-            borderRadius: '12px',
-            fontSize: '14px',
-            fontWeight: '700',
-            cursor: loading ? 'not-allowed' : 'pointer',
-            opacity: loading || !trackingNo.trim() ? 0.6 : 1,
-            display: 'flex',
-            alignItems: 'center',
-            gap: '8px',
-          }}>
+          <button type="submit" disabled={loading || !trackingNo.trim()} style={{ padding: '12px 24px', background: '#0a7255', color: '#fff', border: '0', borderRadius: '12px', fontSize: '14px', fontWeight: '700', cursor: loading ? 'not-allowed' : 'pointer', opacity: loading || !trackingNo.trim() ? 0.6 : 1, display: 'flex', alignItems: 'center', gap: '8px' }}>
             {loading ? <Loader2 size={16} className="animate-spin" /> : <Search size={16} />}
             Search
           </button>
         </form>
 
-        {/* Error */}
-        {error && (
-          <div style={{
-            background: '#fef2f2',
-            border: '1px solid #fecaca',
-            borderRadius: '12px',
-            padding: '16px',
-            color: '#dc2626',
-            fontSize: '14px',
-            textAlign: 'center',
-            maxWidth: '600px',
-            margin: '0 auto 30px',
-          }}>
-            {error}
-          </div>
-        )}
+        {error && <div style={{ background: '#fef2f2', border: '1px solid #fecaca', borderRadius: '12px', padding: '16px', color: '#dc2626', fontSize: '14px', textAlign: 'center', maxWidth: '600px', margin: '0 auto 30px' }}>{error}</div>}
 
-        {/* Certificate */}
         {data && (
           <div>
-            {/* Success banner */}
-            <div style={{
-              background: '#eff8f0',
-              border: '1px solid #c7e3ce',
-              borderRadius: '12px',
-              padding: '16px 20px',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              marginBottom: '24px',
-              flexWrap: 'wrap',
-              gap: '12px',
-            }}>
+            <div style={{ background: '#eff8f0', border: '1px solid #c7e3ce', borderRadius: '12px', padding: '16px 20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '24px', flexWrap: 'wrap', gap: '12px' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                 <CheckCircle2 size={20} color="#087152" />
                 <div>
                   <div style={{ fontWeight: '700', color: '#17654e', fontSize: '14px' }}>Certificate Found</div>
-                  <div style={{ color: '#769187', fontSize: '12px' }}>Certificate No: {data.certificateNo} · {data.serviceName}</div>
+                  <div style={{ color: '#769187', fontSize: '12px' }}>Certificate No: {data.certificateNo} - {data.serviceName}</div>
                 </div>
               </div>
-              <button onClick={handleDownloadPDF} disabled={downloading} style={{
-                padding: '10px 20px',
-                background: '#0a7255',
-                color: '#fff',
-                border: '0',
-                borderRadius: '10px',
-                fontSize: '13px',
-                fontWeight: '700',
-                cursor: downloading ? 'not-allowed' : 'pointer',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '8px',
-                opacity: downloading ? 0.6 : 1,
-              }}>
+              <button onClick={handleDownloadPDF} disabled={downloading} style={{ padding: '10px 20px', background: '#0a7255', color: '#fff', border: '0', borderRadius: '10px', fontSize: '13px', fontWeight: '700', cursor: downloading ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', gap: '8px', opacity: downloading ? 0.6 : 1 }}>
                 {downloading ? <Loader2 size={15} className="animate-spin" /> : <Download size={15} />}
                 Download PDF
               </button>
             </div>
 
-            {/* Certificate render */}
-            <div style={{ overflow: 'auto', borderRadius: '8px', background: '#e8e8e8', padding: '20px' }}>
-              <div ref={certRef}>
+            <div style={{ overflow: 'visible', width: '100%' }}>
+              <div ref={certRef} style={{ width: '297mm', transformOrigin: 'top left', transform: 'scale(0.55)', marginBottom: '-95mm' }}>
                 <Certificate data={data} />
               </div>
             </div>
 
-            {/* Bottom download button */}
             <div style={{ textAlign: 'center', marginTop: '24px' }}>
-              <button onClick={handleDownloadPDF} disabled={downloading} style={{
-                padding: '14px 36px',
-                background: '#0a7255',
-                color: '#fff',
-                border: '0',
-                borderRadius: '12px',
-                fontSize: '15px',
-                fontWeight: '700',
-                cursor: downloading ? 'not-allowed' : 'pointer',
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '10px',
-                opacity: downloading ? 0.6 : 1,
-              }}>
+              <button onClick={handleDownloadPDF} disabled={downloading} style={{ padding: '14px 36px', background: '#0a7255', color: '#fff', border: '0', borderRadius: '12px', fontSize: '15px', fontWeight: '700', cursor: downloading ? 'not-allowed' : 'pointer', display: 'inline-flex', alignItems: 'center', gap: '10px', opacity: downloading ? 0.6 : 1 }}>
                 {downloading ? <Loader2 size={18} className="animate-spin" /> : <Download size={18} />}
                 {downloading ? 'Generating PDF...' : 'Download Certificate PDF'}
                 {!downloading && <ArrowRight size={16} />}
@@ -245,7 +137,6 @@ export default function CertificateDownloadPage() {
           </div>
         )}
 
-        {/* Empty state */}
         {!data && !error && !loading && (
           <div style={{ textAlign: 'center', padding: '60px 20px', color: '#888' }}>
             <Search size={48} color="#ccc" style={{ marginBottom: '16px' }} />
