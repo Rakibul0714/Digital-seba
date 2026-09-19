@@ -1,0 +1,282 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  SUPER_ADMIN
+  UNION_ADMIN
+}
+
+enum ApplicationStatus {
+  PENDING
+  IN_REVIEW
+  APPROVED
+  ISSUED
+  REJECTED
+}
+
+enum RecordStatus {
+  ACTIVE
+  INACTIVE
+  REVOKED
+}
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  role         Role
+  unionId      String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+model District {
+  id         String       @id @default(cuid())
+  nameBn     String
+  code       String       @unique
+  upazilas   Upazila[]
+  postOffices PostOffice[]
+}
+
+model Upazila {
+  id         String   @id @default(cuid())
+  nameBn     String
+  districtId String
+  district   District @relation(fields: [districtId], references: [id])
+  unions     Union[]
+}
+
+model Union {
+  id             String          @id @default(cuid())
+  nameBn         String
+  code           String          @unique
+  upazilaId      String?
+  upazila        Upazila?        @relation(fields: [upazilaId], references: [id])
+  wards          Ward[]
+  applications   Application[]
+  citizens       Citizen[]
+  tradeLicenses  TradeLicense[]
+  createdAt      DateTime        @default(now())
+}
+
+model Ward {
+  id        String    @id @default(cuid())
+  nameBn    String
+  code      String
+  unionId   String
+  union     Union     @relation(fields: [unionId], references: [id])
+  villages  Village[]
+  holdings  Holding[]
+  @@unique([unionId, code])
+}
+
+model Village {
+  id      String @id @default(cuid())
+  nameBn  String
+  wardId  String
+  ward    Ward   @relation(fields: [wardId], references: [id])
+}
+
+model PostOffice {
+  id         String    @id @default(cuid())
+  nameBn     String
+  postCode   String
+  districtId String?
+  district   District? @relation(fields: [districtId], references: [id])
+}
+
+model Service {
+  id           String        @id @default(cuid())
+  slug         String        @unique
+  nameBn       String
+  fee          Int           @default(0)
+  formSchema   Json
+  isActive     Boolean       @default(true)
+  applications Application[]
+}
+
+model Application {
+  id          String            @id @default(cuid())
+  trackingNo  String            @unique
+  serviceId   String
+  unionId     String
+  applicant   Json
+  extraData   Json?
+  status      ApplicationStatus @default(PENDING)
+  remarks     String?
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+  service     Service           @relation(fields: [serviceId], references: [id])
+  union       Union             @relation(fields: [unionId], references: [id])
+  certificate Certificate?
+}
+
+model Certificate {
+  id            String       @id @default(cuid())
+  certNo        String       @unique
+  applicationId String       @unique
+  pdfPath       String?
+  qrCode        String?
+  issuedAt      DateTime?
+  revokedAt     DateTime?
+  application   Application  @relation(fields: [applicationId], references: [id])
+}
+
+model TradeLicense {
+  id          String        @id @default(cuid())
+  licenseNo   String?       @unique
+  trackingNo  String        @unique
+  unionId     String
+  union       Union?        @relation(fields: [unionId], references: [id])
+  ownerBn     String
+  ownerEn     String?
+  businessBn  String
+  businessEn  String?
+  fields      Json
+  fiscalYear  String
+  status      ApplicationStatus @default(PENDING)
+  createdAt   DateTime      @default(now())
+}
+
+model Holding {
+  id            String          @id @default(cuid())
+  holdingNo     String
+  wardId        String
+  khanaPradhan  String
+  mobile        String?
+  survey        Json
+  status        RecordStatus    @default(ACTIVE)
+  photoPath     String?
+  ward          Ward            @relation(fields: [wardId], references: [id])
+  members       HoldingMember[]
+  assessments   TaxAssessment[]
+  @@unique([wardId, holdingNo])
+}
+
+model HoldingMember {
+  id        String   @id @default(cuid())
+  holdingId String
+  nameBn    String
+  relation  String?
+  age       Int?
+  holding   Holding  @relation(fields: [holdingId], references: [id])
+}
+
+model Citizen {
+  id        String       @id @default(cuid())
+  unionId   String
+  union     Union?       @relation(fields: [unionId], references: [id])
+  nameBn    String
+  mobile    String?
+  profile   Json
+  status    RecordStatus @default(ACTIVE)
+  createdAt DateTime     @default(now())
+}
+
+model TaxAssessment {
+  id           String   @id @default(cuid())
+  holdingId    String
+  fiscalYear   String
+  annualValue  Int      @default(0)
+  taxableValue Int      @default(0)
+  arrears      Int      @default(0)
+  total        Int      @default(0)
+  paid         Int      @default(0)
+  due          Int      @default(0)
+  holding      Holding  @relation(fields: [holdingId], references: [id])
+  payments     Payment[]
+  @@unique([holdingId, fiscalYear])
+}
+
+model Payment {
+  id              String         @id @default(cuid())
+  taxAssessmentId String
+  method          String
+  trxId           String?
+  amount          Int
+  status          String         @default("PENDING")
+  gatewayPayload  Json?
+  createdAt       DateTime       @default(now())
+  taxAssessment   TaxAssessment  @relation(fields: [taxAssessmentId], references: [id])
+  receipt         Receipt?
+}
+
+model Receipt {
+  id        String   @id @default(cuid())
+  paymentId String   @unique
+  receiptNo String   @unique
+  pdfPath   String?
+  issuedAt  DateTime @default(now())
+  payment   Payment  @relation(fields: [paymentId], references: [id])
+}
+
+model CarouselSlide {
+  id        String       @id @default(cuid())
+  titleBn   String
+  bodyBn    String?
+  imagePath String?
+  sortOrder Int          @default(0)
+  isActive  Boolean      @default(true)
+}
+
+model Person {
+  id          String  @id @default(cuid())
+  nameBn      String
+  designation String  @default("পৃষ্ঠপোষক")
+  imagePath   String?
+  sortOrder   Int     @default(0)
+  isActive    Boolean @default(true)
+}
+
+model Notice {
+  id          String   @id @default(cuid())
+  titleBn     String
+  bodyBn      String
+  publishedAt DateTime @default(now())
+  isPublished Boolean  @default(true)
+}
+
+model SiteSetting {
+  id        String   @id @default(cuid())
+  key       String   @unique
+  value     Json
+  updatedAt DateTime @updatedAt
+}
+
+model FiscalYear {
+  id        String  @id @default(cuid())
+  label     String  @unique
+  isActive  Boolean @default(true)
+}
+
+model ContactMessage {
+  id        String   @id @default(cuid())
+  name      String
+  mobile    String
+  message   String
+  isRead    Boolean  @default(false)
+  createdAt DateTime @default(now())
+}
+
+model VisitCounter {
+  id    String   @id @default(cuid())
+  date  DateTime @unique
+  count Int      @default(0)
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  userId    String?
+  action    String
+  entity    String
+  entityId  String?
+  ipAddress String?
+  payload   Json?
+  createdAt DateTime @default(now())
+}
